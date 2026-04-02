@@ -35,10 +35,10 @@ use crate::editor_api::EditorControllerApi;
 #[cfg(target_os = "macos")]
 mod macos_gui;
 
-const PLUGIN_NAME: &str = "ReaStream 2110-30";
-const VENDOR_NAME: &str = "OpenAI Prototype";
-const VENDOR_URL: &str = "https://openai.com";
-const VENDOR_EMAIL: &str = "support@openai.com";
+const PLUGIN_NAME: &str = "SomethingNet";
+const VENDOR_NAME: &str = "Something Audio";
+const VENDOR_URL: &str = "";
+const VENDOR_EMAIL: &str = "";
 const PLUGIN_VERSION: &str = "0.1.0";
 const PLUGIN_SUBCATEGORIES: &str = "Fx";
 const SDK_VERSION: &str = "VST 3";
@@ -78,7 +78,7 @@ fn runtime_status_path(params: StreamParameters) -> std::path::PathBuf {
         StreamMode::Receive => "recv",
     };
     std::env::temp_dir().join(format!(
-        "reastream2110-status-{}-{}-{}-{}-{}-{}-{}-{}.txt",
+        "somethingnet-status-{}-{}-{}-{}-{}-{}-{}-{}.txt",
         std::process::id(),
         mode,
         params.port,

@@ -209,7 +209,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "reastream_vst3"
+name = "somethingnet_vst3"
 version = "0.1.0"
 dependencies = [
  "libc",

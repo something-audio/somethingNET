@@ -346,7 +346,7 @@ fn build_editor_ui(controller: EditorControllerApi, mtm: MainThreadMarker) -> Ed
         configure_root_layer(&layer);
     }
 
-    let title = label("REASTREAM 2110-30", 24.0, 348.0, 240.0, 24.0, mtm);
+    let title = label("SOMETHINGNET", 24.0, 348.0, 240.0, 24.0, mtm);
     let subtitle = label(
         "Minimal network audio sender / receiver",
         24.0,

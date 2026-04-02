@@ -20,7 +20,7 @@ const PAYLOAD_TYPE_L24: u8 = 96;
 const RTP_HEADER_SIZE: usize = 12;
 const MAX_PACKET_SIZE: usize = 24_576;
 const MAX_PACKET_SAMPLES: usize = 441 * MAX_CHANNELS;
-const SDP_FILE_NAME: &str = "reastream2110-30.sdp";
+const SDP_FILE_NAME: &str = "somethingnet.sdp";
 const STARTUP_BUFFER_PACKETS: usize = 4;
 const MAX_BUFFER_PACKETS: usize = 128;
 const TARGET_CALLBACKS: usize = 2;
@@ -1364,7 +1364,7 @@ fn write_sdp_file(
     let content = format!(
         "v=0\r\n\
 o=- 0 0 IN IP4 {local_ip}\r\n\
-s=ReaStream 2110-30 Sender\r\n\
+s=SomethingNet Sender\r\n\
 c=IN IP4 {destination_ip}\r\n\
 t=0 0\r\n\
 m=audio {destination_port} RTP/AVP {payload_type}\r\n\

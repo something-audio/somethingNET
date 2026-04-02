@@ -3,8 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET_DIR="${ROOT_DIR}/target/release"
-STATIC_ARTIFACT="${TARGET_DIR}/libreastream_vst3.a"
-PLUGIN_NAME="ReaStream2110"
+STATIC_ARTIFACT="${TARGET_DIR}/libsomethingnet_vst3.a"
+PLUGIN_NAME="SomethingNet"
 INSTALL_ROOT="${INSTALL_ROOT:-/Library/Audio/Plug-Ins/VST3}"
 PLUGIN_BUNDLE="${INSTALL_ROOT}/${PLUGIN_NAME}.vst3"
 PLUGIN_BINARY="${PLUGIN_BUNDLE}/Contents/MacOS/${PLUGIN_NAME}"
@@ -33,13 +33,13 @@ cat > "${PLIST_PATH}" <<'EOF'
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleExecutable</key>
-  <string>ReaStream2110</string>
+  <string>SomethingNet</string>
   <key>CFBundleIdentifier</key>
-  <string>com.openai.reastream2110</string>
+  <string>com.somethingaudio.somethingnet</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>ReaStream2110</string>
+  <string>SomethingNet</string>
   <key>CFBundlePackageType</key>
   <string>BNDL</string>
   <key>CFBundleSignature</key>

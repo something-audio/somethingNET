@@ -1,4 +1,4 @@
-# ReaStream 2110-30
+# SomethingNet
 
 Rust VST3 sender/receiver plugin for TouchDesigner and REAPER that moves up to 8 channels of PCM audio over unicast RTP.
 
@@ -14,7 +14,7 @@ Rust VST3 sender/receiver plugin for TouchDesigner and REAPER that moves up to 8
 - In `Send` mode the plugin passes audio through unchanged while transmitting a network copy.
 - In `Receive` mode the plugin renders the incoming network stream to its outputs.
 - Uses `L24` RTP payload packing with fixed 1 ms packetization.
-- Writes an SDP file to the system temp directory at `reastream2110-30.sdp`.
+- Writes an SDP file to the system temp directory at `somethingnet.sdp`.
 - On macOS, the plugin now provides a native editor view with an `Apply` button for TouchDesigner and REAPER.
 
 ## ST 2110-30 alignment
@@ -54,7 +54,7 @@ scripts/install_macos_vst3.sh
 
 The script creates:
 
-`~/Library/Audio/Plug-Ins/VST3/ReaStream2110.vst3`
+`~/Library/Audio/Plug-Ins/VST3/SomethingNet.vst3`
 
 ## TouchDesigner -> REAPER
 
