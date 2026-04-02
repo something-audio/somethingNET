@@ -1,0 +1,15 @@
+<svg width="960" height="320" viewBox="0 0 960 320" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="960" height="320" rx="28" fill="#EEE6D8"/>
+  <rect x="32" y="32" width="896" height="256" rx="18" fill="#F7F2E9" stroke="#201D1A" stroke-width="4"/>
+  <rect x="72" y="72" width="176" height="176" rx="22" fill="#201D1A"/>
+  <rect x="95" y="95" width="130" height="130" rx="16" fill="#F7F2E9"/>
+  <circle cx="160" cy="160" r="38" stroke="#201D1A" stroke-width="10"/>
+  <path d="M110 160H170C183.255 160 194 149.255 194 136V124" stroke="#201D1A" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M210 136H194" stroke="#D06A2B" stroke-width="10" stroke-linecap="round"/>
+  <path d="M110 185H210" stroke="#201D1A" stroke-width="10" stroke-linecap="round"/>
+  <path d="M110 203H178" stroke="#201D1A" stroke-width="10" stroke-linecap="round"/>
+  <path d="M295 108H888" stroke="#B3A693" stroke-width="2"/>
+  <path d="M295 212H888" stroke="#B3A693" stroke-width="2"/>
+  <text x="294" y="168" fill="#201D1A" font-family="Avenir Next, Futura, Helvetica, Arial, sans-serif" font-size="72" font-weight="700" letter-spacing="8">SOMETHINGNET</text>
+  <text x="298" y="206" fill="#6C6358" font-family="Avenir Next, Futura, Helvetica, Arial, sans-serif" font-size="24" font-weight="500" letter-spacing="4">NETWORK AUDIO FOR CREATIVE TOOLS</text>
+</svg>
