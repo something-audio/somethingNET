@@ -14,17 +14,16 @@ use vst3::{
 };
 use windows_sys::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, CreateSolidBrush, DEFAULT_GUI_FONT, DeleteObject, DrawTextW, EndPaint, FillRect,
-    FrameRect, GetStockObject, HBRUSH, HDC, PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor,
-    TRANSPARENT,
+    BeginPaint, CreateSolidBrush, DEFAULT_GUI_FONT, DT_CENTER, DT_LEFT, DT_SINGLELINE, DT_VCENTER,
+    DeleteObject, DrawTextW, EndPaint, FillRect, FrameRect, GetStockObject, HDC, InvalidateRect,
+    PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DT_CENTER, DT_LEFT, DT_SINGLELINE,
-    DT_VCENTER, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetClientRect, GetWindowLongPtrW,
-    IDC_ARROW, InvalidateRect, LoadCursorW, RegisterClassW, SW_SHOW, SetTimer, SetWindowLongPtrW,
-    ShowWindow, WM_CREATE, WM_DESTROY, WM_LBUTTONUP, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_TIMER,
-    WNDCLASSW, WS_CHILD, WS_VISIBLE,
+    CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
+    GWLP_USERDATA, GetClientRect, GetWindowLongPtrW, IDC_ARROW, LoadCursorW, RegisterClassW,
+    SW_SHOW, SetTimer, SetWindowLongPtrW, ShowWindow, WM_LBUTTONUP, WM_NCCREATE, WM_NCDESTROY,
+    WM_PAINT, WM_TIMER, WNDCLASSW, WS_CHILD, WS_VISIBLE,
 };
 
 use crate::{
@@ -37,7 +36,7 @@ use crate::{
         ptp_minus_rect, ptp_plus_rect, ptp_value_rect, runtime_panel_rect, theme,
         transport_multi_rect, transport_uni_rect,
     },
-    network::{ClockReference, StreamMode},
+    network::{ClockReference, StreamMode, StreamTransport},
 };
 
 const TIMER_ID: usize = 1;
@@ -61,7 +60,7 @@ impl WinEditorView {
     fn new(controller: EditorControllerApi) -> Self {
         Self {
             controller,
-            hwnd: Cell::new(0),
+            hwnd: Cell::new(ptr::null_mut()),
         }
     }
 }
@@ -81,7 +80,7 @@ impl IPlugViewTrait for WinEditorView {
         }
 
         let parent_hwnd = parent as HWND;
-        if parent_hwnd == 0 {
+        if parent_hwnd.is_null() {
             return kResultFalse;
         }
 
@@ -107,12 +106,12 @@ impl IPlugViewTrait for WinEditorView {
             VIEW_WIDTH,
             VIEW_HEIGHT,
             parent_hwnd,
-            0,
+            ptr::null_mut(),
             instance,
             state_ptr.cast(),
         );
 
-        if hwnd == 0 {
+        if hwnd.is_null() {
             let _ = Box::from_raw(state_ptr);
             return kResultFalse;
         }
@@ -124,8 +123,8 @@ impl IPlugViewTrait for WinEditorView {
     }
 
     unsafe fn removed(&self) -> tresult {
-        let hwnd = self.hwnd.replace(0);
-        if hwnd != 0 {
+        let hwnd = self.hwnd.replace(ptr::null_mut());
+        if !hwnd.is_null() {
             DestroyWindow(hwnd);
         }
         kResultOk
@@ -201,7 +200,6 @@ unsafe extern "system" fn editor_window_proc(
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
             1
         }
-        WM_CREATE => 0,
         WM_LBUTTONUP => {
             if let Some(state) = state_mut(hwnd) {
                 let x = (lparam as u32 & 0xffff) as i16 as i32;
@@ -221,7 +219,7 @@ unsafe extern "system" fn editor_window_proc(
         }
         WM_PAINT => {
             let mut paint = PAINTSTRUCT {
-                hdc: 0,
+                hdc: ptr::null_mut(),
                 fErase: 0,
                 rcPaint: RECT {
                     left: 0,
@@ -240,7 +238,6 @@ unsafe extern "system" fn editor_window_proc(
             EndPaint(hwnd, &paint);
             0
         }
-        WM_DESTROY => 0,
         WM_NCDESTROY => {
             let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
             if !ptr.is_null() {
@@ -262,9 +259,9 @@ fn register_window_class(instance: HINSTANCE, class_name: &[u16]) {
             cbClsExtra: 0,
             cbWndExtra: 0,
             hInstance: instance,
-            hIcon: 0,
-            hCursor: LoadCursorW(0, IDC_ARROW),
-            hbrBackground: 0,
+            hIcon: ptr::null_mut(),
+            hCursor: LoadCursorW(ptr::null_mut(), IDC_ARROW),
+            hbrBackground: ptr::null_mut(),
             lpszMenuName: ptr::null(),
             lpszClassName: class_name.as_ptr(),
         };

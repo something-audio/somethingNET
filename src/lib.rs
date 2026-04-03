@@ -1385,8 +1385,8 @@ impl IEditControllerTrait for StreamController {
         info.defaultNormalizedValue = spec.plain_to_normalized(spec.default);
         info.unitId = 0;
         info.flags = if spec.id == PARAM_APPLY_SEQ {
-            ParameterInfo_::ParameterFlags_::kCanAutomate
-                | ParameterInfo_::ParameterFlags_::kIsHidden
+            ParameterInfo_::ParameterFlags_::kIsHidden
+                | ParameterInfo_::ParameterFlags_::kIsReadOnly
         } else {
             ParameterInfo_::ParameterFlags_::kCanAutomate
         };
