@@ -1,6 +1,6 @@
 use std::ffi::c_char;
 
-use crate::network::{MAX_CHANNELS, StreamMode, StreamParameters, StreamTransport};
+use crate::network::{ClockReference, MAX_CHANNELS, StreamMode, StreamParameters, StreamTransport};
 
 pub(crate) const PARAM_ENABLED: u32 = 0;
 pub(crate) const PARAM_MODE: u32 = 1;
@@ -11,8 +11,10 @@ pub(crate) const PARAM_IP_1: u32 = 5;
 pub(crate) const PARAM_IP_2: u32 = 6;
 pub(crate) const PARAM_IP_3: u32 = 7;
 pub(crate) const PARAM_IP_4: u32 = 8;
-pub(crate) const PARAM_APPLY_SEQ: u32 = 9;
-pub(crate) const PARAM_COUNT: i32 = 10;
+pub(crate) const PARAM_CLOCK_REF: u32 = 9;
+pub(crate) const PARAM_PTP_DOMAIN: u32 = 10;
+pub(crate) const PARAM_APPLY_SEQ: u32 = 11;
+pub(crate) const PARAM_COUNT: i32 = 12;
 
 #[derive(Clone, Copy)]
 pub(crate) struct IntParamSpec {
@@ -63,6 +65,8 @@ pub(crate) fn default_stream_parameters() -> StreamParameters {
         channels: 2,
         port: 5004,
         ip: [127, 0, 0, 1],
+        clock_reference: ClockReference::Local,
+        ptp_domain: 0,
     }
 }
 
@@ -149,6 +153,24 @@ pub(crate) fn parameter_spec(id: u32) -> Option<IntParamSpec> {
             min: 0,
             max: 255,
             default: defaults.ip[3] as u32,
+        },
+        PARAM_CLOCK_REF => IntParamSpec {
+            id,
+            title: "Clock Reference",
+            short_title: "Clock",
+            units: "",
+            min: 0,
+            max: 1,
+            default: defaults.clock_reference.as_u8() as u32,
+        },
+        PARAM_PTP_DOMAIN => IntParamSpec {
+            id,
+            title: "PTP Domain",
+            short_title: "Domain",
+            units: "",
+            min: 0,
+            max: 127,
+            default: defaults.ptp_domain as u32,
         },
         PARAM_APPLY_SEQ => IntParamSpec {
             id,

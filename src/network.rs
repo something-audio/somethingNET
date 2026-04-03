@@ -14,7 +14,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub const MAX_CHANNELS: usize = 16;
-pub const STATE_SIZE: usize = 15;
+pub const STATE_SIZE: usize = 17;
 pub const LEGACY_STATE_SIZE: usize = 14;
 
 const PAYLOAD_TYPE_L24: u8 = 96;
@@ -64,6 +64,12 @@ pub enum StreamMode {
 pub enum StreamTransport {
     Unicast,
     Multicast,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClockReference {
+    Local,
+    Ptp,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -128,6 +134,36 @@ impl StreamTransport {
     }
 }
 
+impl ClockReference {
+    pub fn from_u32(value: u32) -> Self {
+        match value {
+            1 => Self::Ptp,
+            _ => Self::Local,
+        }
+    }
+
+    pub fn as_u8(self) -> u8 {
+        match self {
+            Self::Local => 0,
+            Self::Ptp => 1,
+        }
+    }
+
+    pub(crate) fn status_name(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Ptp => "ptp",
+        }
+    }
+
+    fn sdp_ts_refclk(self) -> &'static str {
+        match self {
+            Self::Local => "a=ts-refclk:local\r\n",
+            Self::Ptp => "a=ts-refclk:ptp=IEEE1588-2008:traceable\r\n",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StreamParameters {
     pub enabled: bool,
@@ -136,6 +172,8 @@ pub struct StreamParameters {
     pub channels: u8,
     pub port: u16,
     pub ip: [u8; 4],
+    pub clock_reference: ClockReference,
+    pub ptp_domain: u8,
 }
 
 impl StreamParameters {
@@ -352,7 +390,11 @@ fn configure_thread_priority() {
     }
 }
 
-pub(crate) fn warning_text(sample_rate_hz: u32, channels: u8) -> String {
+pub(crate) fn warning_text(
+    sample_rate_hz: u32,
+    channels: u8,
+    clock_reference: ClockReference,
+) -> String {
     let mut warnings = Vec::new();
     if sample_rate_hz == 44_100 {
         warnings.push("44.1 kHz is supported but not ST 2110-30 compliant");
@@ -362,6 +404,11 @@ pub(crate) fn warning_text(sample_rate_hz: u32, channels: u8) -> String {
     }
     if sample_rate_hz == 96_000 && channels > 4 {
         warnings.push("More than 4 channels at 96 kHz is outside ST 2110-30 Level AX");
+    }
+    if matches!(clock_reference, ClockReference::Ptp) {
+        warnings.push(
+            "PTP mode currently advertises SDP clock reference and domain only; host clock discipline is still TODO",
+        );
     }
     warnings.join(" | ")
 }
@@ -509,7 +556,7 @@ fn spawn_sender_worker(
             local_ip,
             destination,
             stream.level,
-            stream.params.channels,
+            stream.params,
         );
         thread_active.store(true, Ordering::Relaxed);
         let mut backlog = VecDeque::<Box<SentPacket>>::with_capacity(MAX_SENDER_BACKLOG_PACKETS);
@@ -1548,8 +1595,15 @@ fn write_sdp_file(
     local_ip: Ipv4Addr,
     destination: SocketAddrV4,
     level: StreamLevel,
-    channels: u8,
+    params: StreamParameters,
 ) {
+    let mut extra_clock_lines = String::new();
+    if matches!(params.clock_reference, ClockReference::Ptp) {
+        extra_clock_lines.push_str(&format!(
+            "a=x-somethingnet-ptp-domain:{}\r\n",
+            params.ptp_domain
+        ));
+    }
     let content = format!(
         "v=0\r\n\
 o=- 0 0 IN IP4 {local_ip}\r\n\
@@ -1562,16 +1616,19 @@ a=fmtp:{payload_type} channel-order=SMPTE2110.({channel_order})\r\n\
 a=ptime:{ptime}\r\n\
 a=maxptime:{ptime}\r\n\
 a=sendonly\r\n\
-a=ts-refclk:local\r\n\
+{a_clock_ref}\
 a=mediaclk:direct=0\r\n\
+{a_clock_extra}\
 a=x-conformance:{conformance}\r\n",
         destination_ip = destination.ip(),
         destination_port = destination.port(),
         payload_type = PAYLOAD_TYPE_L24,
         sample_rate = level.sample_rate_hz(),
-        channels = channels,
-        channel_order = channel_order(channels),
+        channels = params.channels,
+        channel_order = channel_order(params.channels),
         ptime = level.ptime_ms(),
+        a_clock_ref = params.clock_reference.sdp_ts_refclk(),
+        a_clock_extra = extra_clock_lines,
         conformance = level.conformance_label(),
     );
 
@@ -1801,13 +1858,15 @@ fn write_l24_sample_vec(dst: &mut Vec<u8>, sample: f32) {
 pub fn encode_state(state: StreamParameters) -> [u8; STATE_SIZE] {
     let mut out = [0_u8; STATE_SIZE];
     out[0..4].copy_from_slice(b"RST3");
-    out[4] = 3;
+    out[4] = 4;
     out[5] = state.enabled as u8;
     out[6] = state.mode.as_u8();
     out[7] = state.transport.as_u8();
     out[8] = state.channels;
     out[9..11].copy_from_slice(&state.port.to_le_bytes());
     out[11..15].copy_from_slice(&state.ip);
+    out[15] = state.clock_reference.as_u8();
+    out[16] = state.ptp_domain.min(127);
     out
 }
 
@@ -1825,7 +1884,14 @@ pub fn decode_state(bytes: &[u8]) -> Option<StreamParameters> {
             8,
             10,
         ),
-        3 if bytes.len() >= STATE_SIZE => (
+        3 if bytes.len() >= 15 => (
+            StreamMode::from_u32(bytes[6] as u32),
+            StreamTransport::from_u32(bytes[7] as u32),
+            8,
+            9,
+            11,
+        ),
+        4 if bytes.len() >= STATE_SIZE => (
             StreamMode::from_u32(bytes[6] as u32),
             StreamTransport::from_u32(bytes[7] as u32),
             8,
@@ -1836,6 +1902,13 @@ pub fn decode_state(bytes: &[u8]) -> Option<StreamParameters> {
     };
 
     let channels = bytes[channels_index].clamp(1, MAX_CHANNELS as u8);
+    let (clock_reference, ptp_domain) = match bytes[4] {
+        4 if bytes.len() >= STATE_SIZE => (
+            ClockReference::from_u32(bytes[15] as u32),
+            bytes[16].min(127),
+        ),
+        _ => (ClockReference::Local, 0),
+    };
     Some(StreamParameters {
         enabled: bytes[5] != 0,
         mode,
@@ -1848,6 +1921,8 @@ pub fn decode_state(bytes: &[u8]) -> Option<StreamParameters> {
             bytes[ip_index + 2],
             bytes[ip_index + 3],
         ],
+        clock_reference,
+        ptp_domain,
     })
 }
 
@@ -1873,6 +1948,8 @@ mod tests {
             channels: 8,
             port: 5004,
             ip: [192, 168, 1, 42],
+            clock_reference: ClockReference::Ptp,
+            ptp_domain: 0,
         };
 
         let encoded = encode_state(original);
@@ -1912,6 +1989,8 @@ mod tests {
             channels: 2,
             port: 5004,
             ip: [239, 69, 1, 30],
+            clock_reference: ClockReference::Local,
+            ptp_domain: 0,
         };
 
         assert!(params.sane_listener());
@@ -1928,6 +2007,8 @@ mod tests {
             channels: 2,
             port: 5004,
             ip: [0, 0, 0, 0],
+            clock_reference: ClockReference::Local,
+            ptp_domain: 0,
         };
 
         assert!(!params.sane_destination());
@@ -1977,6 +2058,8 @@ mod tests {
             channels: 2,
             port: 5004,
             ip: [127, 0, 0, 1],
+            clock_reference: ClockReference::Local,
+            ptp_domain: 0,
         };
         let left = vec![0.1_f32; 24];
         let right = vec![-0.1_f32; 24];
@@ -2036,9 +2119,14 @@ mod tests {
 
     #[test]
     fn warning_text_marks_44100_as_non_standard() {
-        assert!(warning_text(44_100, 2).contains("not ST 2110-30 compliant"));
-        assert!(warning_text(48_000, 16).contains("outside ST 2110-30 Level A"));
-        assert_eq!(warning_text(48_000, 8), "");
+        assert!(
+            warning_text(44_100, 2, ClockReference::Local).contains("not ST 2110-30 compliant")
+        );
+        assert!(
+            warning_text(48_000, 16, ClockReference::Local).contains("outside ST 2110-30 Level A")
+        );
+        assert_eq!(warning_text(48_000, 8, ClockReference::Local), "");
+        assert!(warning_text(48_000, 2, ClockReference::Ptp).contains("PTP mode"));
     }
 
     #[test]
@@ -2104,6 +2192,8 @@ mod tests {
             channels: 2,
             port,
             ip: [127, 0, 0, 1],
+            clock_reference: ClockReference::Local,
+            ptp_domain: 0,
         };
 
         let left = vec![0.25_f32; 48];

@@ -52,6 +52,7 @@ The sender also writes an SDP file to the system temp directory:
 - [x] Native macOS GUI
 - [x] TouchDesigner -> REAPER workflow validation
 - [x] Support for up to `16` channels per stream
+- [x] PTP-aware clock reference signaling and domain configuration
 - [ ] PTP clocking
 - [ ] NMOS / control-plane discovery
 - [ ] Full ST 2110 system integration
@@ -258,6 +259,8 @@ That workflow:
 - broaden host interoperability testing
 - add optional clocking/control-plane integrations where they materially improve interoperability
 - keep the transport fast, simple, and unobtrusive in real-world creative workflows
+
+The current latency and clocking plan is tracked in [docs/latency-and-ptp-plan.md](docs/latency-and-ptp-plan.md).
 
 ## Contributing
 
