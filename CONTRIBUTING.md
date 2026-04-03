@@ -145,6 +145,8 @@ Workflow files:
 - [.github/workflows/ci.yml](.github/workflows/ci.yml)
 - [.github/workflows/release.yml](.github/workflows/release.yml)
 
+Release signing and notarization requirements are documented in [docs/distribution-signing.md](docs/distribution-signing.md).
+
 ## Code Style Notes
 
 - keep the audio thread free of blocking calls, file I/O, and unnecessary allocation

@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   build-packages:
@@ -47,8 +48,95 @@ jobs:
           python scripts/package_vst3.py \
             --platform "${{ matrix.platform }}" \
             --bundle-root "dist/SomethingNet.vst3" \
-            --archive "dist/${{ matrix.archive_name }}" \
             --version "${{ github.ref_name }}"
+
+      - name: Import Apple signing certificate
+        if: ${{ matrix.platform == 'macos' && secrets.APPLE_SIGNING_CERTIFICATE_P12_BASE64 != '' && secrets.APPLE_SIGNING_CERTIFICATE_PASSWORD != '' }}
+        shell: bash
+        env:
+          APPLE_SIGNING_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_SIGNING_CERTIFICATE_P12_BASE64 }}
+          APPLE_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          KEYCHAIN_PATH="$RUNNER_TEMP/somethingnet-signing.keychain-db"
+          CERT_PATH="$RUNNER_TEMP/somethingnet-signing.p12"
+          python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          cert = base64.b64decode(os.environ["APPLE_SIGNING_CERTIFICATE_P12_BASE64"])
+          Path(os.environ["RUNNER_TEMP"], "somethingnet-signing.p12").write_bytes(cert)
+          PY
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$APPLE_SIGNING_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          {
+            echo "APPLE_CODESIGN_KEYCHAIN=$KEYCHAIN_PATH"
+            echo "APPLE_CODESIGN_KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD"
+          } >> "$GITHUB_ENV"
+
+      - name: Store Apple notary profile
+        if: ${{ matrix.platform == 'macos' && secrets.APPLE_NOTARY_KEYCHAIN_PROFILE != '' && secrets.APPLE_NOTARY_APPLE_ID != '' && secrets.APPLE_NOTARY_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' }}
+        shell: bash
+        env:
+          APPLE_NOTARY_KEYCHAIN_PROFILE: ${{ secrets.APPLE_NOTARY_KEYCHAIN_PROFILE }}
+          APPLE_NOTARY_APPLE_ID: ${{ secrets.APPLE_NOTARY_APPLE_ID }}
+          APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          xcrun notarytool store-credentials "$APPLE_NOTARY_KEYCHAIN_PROFILE" \
+            --apple-id "$APPLE_NOTARY_APPLE_ID" \
+            --password "$APPLE_NOTARY_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID"
+
+      - name: Sign and notarize macOS bundle
+        if: ${{ matrix.platform == 'macos' && secrets.APPLE_CODESIGN_IDENTITY != '' }}
+        shell: bash
+        env:
+          APPLE_CODESIGN_IDENTITY: ${{ secrets.APPLE_CODESIGN_IDENTITY }}
+          APPLE_NOTARY_KEYCHAIN_PROFILE: ${{ secrets.APPLE_NOTARY_KEYCHAIN_PROFILE }}
+          APPLE_NOTARY_APPLE_ID: ${{ secrets.APPLE_NOTARY_APPLE_ID }}
+          APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          ./scripts/sign_macos_bundle.sh dist/SomethingNet.vst3
+
+      - name: Sign Windows bundle with Azure Artifact Signing
+        if: ${{ matrix.platform == 'windows' && secrets.AZURE_TENANT_ID != '' && secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_CLIENT_SECRET != '' && secrets.AZURE_TRUSTED_SIGNING_ENDPOINT != '' && secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME != '' && secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME != '' }}
+        uses: azure/trusted-signing-action@v0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          files: ${{ github.workspace }}\dist\SomethingNet.vst3\Contents\x86_64-win\SomethingNet.vst3
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: SomethingNet VST3 plugin
+
+      - name: Sign Windows bundle with PFX certificate
+        if: ${{ matrix.platform == 'windows' && secrets.AZURE_TENANT_ID == '' && secrets.WINDOWS_SIGN_CERTIFICATE_P12_BASE64 != '' && secrets.WINDOWS_SIGN_CERTIFICATE_PASSWORD != '' }}
+        shell: pwsh
+        env:
+          WINDOWS_SIGN_CERTIFICATE_P12_BASE64: ${{ secrets.WINDOWS_SIGN_CERTIFICATE_P12_BASE64 }}
+          WINDOWS_SIGN_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGN_CERTIFICATE_PASSWORD }}
+          WINDOWS_SIGN_TIMESTAMP_URL: ${{ secrets.WINDOWS_SIGN_TIMESTAMP_URL }}
+        run: |
+          .\scripts\sign_windows_vst3.ps1 -BundleRoot (Join-Path $pwd 'dist\SomethingNet.vst3')
+
+      - name: Archive VST3 bundle
+        shell: bash
+        run: |
+          python scripts/archive_vst3.py \
+            --bundle-root "dist/SomethingNet.vst3" \
+            --archive "dist/${{ matrix.archive_name }}"
 
       - name: Upload packaged artifact
         uses: actions/upload-artifact@v4
@@ -77,6 +165,26 @@ jobs:
         run: |
           cd release-upload
           sha256sum *.zip > SHA256SUMS.txt
+
+      - name: Sign release checksums and archives with GPG
+        if: ${{ secrets.RELEASE_GPG_PRIVATE_KEY_BASE64 != '' && secrets.RELEASE_GPG_PASSPHRASE != '' }}
+        env:
+          RELEASE_GPG_PRIVATE_KEY_BASE64: ${{ secrets.RELEASE_GPG_PRIVATE_KEY_BASE64 }}
+          RELEASE_GPG_PASSPHRASE: ${{ secrets.RELEASE_GPG_PASSPHRASE }}
+        run: |
+          python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          key = base64.b64decode(os.environ["RELEASE_GPG_PRIVATE_KEY_BASE64"])
+          Path(os.environ["RUNNER_TEMP"], "release-signing.key").write_bytes(key)
+          PY
+          gpg --batch --import "$RUNNER_TEMP/release-signing.key"
+          cd release-upload
+          for artifact in *.zip SHA256SUMS.txt; do
+            gpg --batch --yes --pinentry-mode loopback --passphrase "$RELEASE_GPG_PASSPHRASE" --armor --detach-sign "$artifact"
+          done
 
       - name: Create or update release
         env:

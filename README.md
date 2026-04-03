@@ -53,11 +53,12 @@ The sender also writes an SDP file to the system temp directory:
 - [x] TouchDesigner -> REAPER workflow validation
 - [x] Support for up to `16` channels per stream
 - [x] PTP-aware clock reference signaling and domain configuration
+- [x] Cross-platform release automation checked into the repo
+- [x] Distribution signing and notarization hooks for release builds
 - [ ] PTP clocking
 - [ ] NMOS / control-plane discovery
 - [ ] Full ST 2110 system integration
 - [ ] Windows-specific QoS handling
-- [x] Cross-platform release automation checked into the repo
 
 ## Repository Layout
 
@@ -245,6 +246,8 @@ That workflow:
 - zips the bundles for distribution
 - uploads the archives to the matching GitHub release
 - publishes a `SHA256SUMS.txt` file alongside the release assets
+
+Signing and notarization setup is documented in [docs/distribution-signing.md](docs/distribution-signing.md).
 
 ## Limitations
 
