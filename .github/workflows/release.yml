@@ -192,10 +192,13 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           TAG="${GITHUB_REF_NAME}"
+          RELEASE_ARGS=(--repo "$GH_REPO" --title "$TAG")
+          if [[ "$TAG" == *"-rc"* ]]; then
+            RELEASE_ARGS+=(--prerelease --notes "Automated prerelease candidate for $TAG")
+          else
+            RELEASE_ARGS+=(--notes "Automated release for $TAG")
+          fi
           if ! gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
-            gh release create "$TAG" \
-              --repo "$GH_REPO" \
-              --title "$TAG" \
-              --notes "Automated release for $TAG"
+            gh release create "$TAG" "${RELEASE_ARGS[@]}"
           fi
           gh release upload "$TAG" release-upload/* --repo "$GH_REPO" --clobber
