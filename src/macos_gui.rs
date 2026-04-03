@@ -9,8 +9,8 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSButton, NSColor, NSControlStateValueOff, NSControlStateValueOn,
-    NSSegmentedControl, NSTextField, NSView,
+    NSAutoresizingMaskOptions, NSBezelStyle, NSButton, NSButtonType, NSColor,
+    NSControlStateValueOff, NSControlStateValueOn, NSSegmentedControl, NSTextField, NSView,
 };
 use objc2_foundation::{NSPoint, NSSize, NSString, NSTimer, ns_string};
 use objc2_quartz_core::CALayer;
@@ -32,7 +32,7 @@ use crate::{
 };
 
 const VIEW_WIDTH: f64 = 500.0;
-const VIEW_HEIGHT: f64 = 392.0;
+const VIEW_HEIGHT: f64 = 428.0;
 
 struct EditorUi {
     root: Retained<NSView>,
@@ -165,11 +165,15 @@ impl IPlugViewTrait for MacEditorView {
 
 struct EditorTargetIvars {
     controller: EditorControllerApi,
+    root: Retained<NSView>,
+    top_rule: Retained<NSView>,
+    runtime_panel: Retained<NSView>,
     enabled: Retained<NSButton>,
     mode: Retained<NSSegmentedControl>,
     transport: Retained<NSSegmentedControl>,
     channels: Retained<NSTextField>,
     port: Retained<NSTextField>,
+    mode_badge: Retained<NSTextField>,
     ip: [Retained<NSTextField>; 4],
     endpoint_label: Retained<NSTextField>,
     endpoint_hint: Retained<NSTextField>,
@@ -177,11 +181,15 @@ struct EditorTargetIvars {
 }
 
 struct EditorControls {
+    root: Retained<NSView>,
+    top_rule: Retained<NSView>,
+    runtime_panel: Retained<NSView>,
     enabled: Retained<NSButton>,
     mode: Retained<NSSegmentedControl>,
     transport: Retained<NSSegmentedControl>,
     channels: Retained<NSTextField>,
     port: Retained<NSTextField>,
+    mode_badge: Retained<NSTextField>,
     ip: [Retained<NSTextField>; 4],
     endpoint_label: Retained<NSTextField>,
     endpoint_hint: Retained<NSTextField>,
@@ -197,6 +205,29 @@ define_class!(
     unsafe impl NSObjectProtocol for EditorTarget {}
 
     impl EditorTarget {
+        #[unsafe(method(enabledChanged:))]
+        fn enabled_changed(&self, _sender: Option<&AnyObject>) {
+            let controller = self.ivars().controller;
+            let enabled = if self.ivars().enabled.state() == NSControlStateValueOn {
+                1
+            } else {
+                0
+            };
+
+            unsafe {
+                (controller.apply_ui_parameter)(
+                    controller.controller,
+                    PARAM_ENABLED,
+                    parameter_spec(PARAM_ENABLED)
+                        .unwrap()
+                        .plain_to_normalized(enabled),
+                );
+            }
+
+            sync_controls_from_controller(self);
+            sync_status_from_controller(self);
+        }
+
         #[unsafe(method(modeChanged:))]
         fn mode_changed(&self, _sender: Option<&AnyObject>) {
             sync_transport_semantics(self);
@@ -317,11 +348,15 @@ impl EditorTarget {
     ) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(EditorTargetIvars {
             controller,
+            root: controls.root,
+            top_rule: controls.top_rule,
+            runtime_panel: controls.runtime_panel,
             enabled: controls.enabled,
             mode: controls.mode,
             transport: controls.transport,
             channels: controls.channels,
             port: controls.port,
+            mode_badge: controls.mode_badge,
             ip: controls.ip,
             endpoint_label: controls.endpoint_label,
             endpoint_hint: controls.endpoint_hint,
@@ -346,67 +381,62 @@ fn build_editor_ui(controller: EditorControllerApi, mtm: MainThreadMarker) -> Ed
         configure_root_layer(&layer);
     }
 
-    let title = label("SOMETHINGNET", 24.0, 348.0, 240.0, 24.0, mtm);
-    let subtitle = label(
-        "Minimal network audio sender / receiver",
-        24.0,
-        326.0,
-        320.0,
-        18.0,
-        mtm,
-    );
-    let top_rule = separator(24.0, 314.0, 452.0, mtm);
+    let title = label("SOMETHINGNET", 24.0, 384.0, 240.0, 24.0, mtm);
+    let mode_badge = secondary_label("SEND", 268.0, 385.0, 88.0, 20.0, mtm);
+    let top_rule = separator(24.0, 368.0, 452.0, mtm);
 
-    let enabled = unsafe {
-        NSButton::checkboxWithTitle_target_action(ns_string!("Enabled"), None, None, mtm)
-    };
-    set_frame(&enabled, 24.0, 280.0, 120.0, 24.0);
+    let enabled = latch_toggle_button("Enabled", 364.0, 376.0, 112.0, 30.0, mtm);
 
-    let mode_label = label("Mode", 160.0, 282.0, 48.0, 18.0, mtm);
+    let mode_label = label("Mode", 160.0, 332.0, 48.0, 18.0, mtm);
     let mode = NSSegmentedControl::new(mtm);
-    set_frame(&mode, 214.0, 276.0, 176.0, 28.0);
+    set_frame(&mode, 214.0, 326.0, 176.0, 28.0);
     mode.setSegmentCount(2);
     mode.setLabel_forSegment(ns_string!("Send"), 0);
     mode.setLabel_forSegment(ns_string!("Receive"), 1);
 
-    let transport_label = label("Transport", 24.0, 242.0, 84.0, 18.0, mtm);
+    let transport_label = label("Transport", 24.0, 292.0, 84.0, 18.0, mtm);
     let transport = NSSegmentedControl::new(mtm);
-    set_frame(&transport, 110.0, 236.0, 188.0, 28.0);
+    set_frame(&transport, 110.0, 286.0, 188.0, 28.0);
     transport.setSegmentCount(2);
     transport.setLabel_forSegment(ns_string!("Unicast"), 0);
     transport.setLabel_forSegment(ns_string!("Multicast"), 1);
 
-    let channels_label = label("Channels", 24.0, 198.0, 80.0, 18.0, mtm);
-    let channels = field("", 110.0, 192.0, 72.0, 24.0, mtm);
-    let port_label = label("Port", 214.0, 198.0, 40.0, 18.0, mtm);
-    let port = field("", 258.0, 192.0, 110.0, 24.0, mtm);
+    let channels_label = label("Channels", 24.0, 248.0, 80.0, 18.0, mtm);
+    let channels = field("", 110.0, 242.0, 72.0, 24.0, mtm);
+    let port_label = label("Port", 214.0, 248.0, 40.0, 18.0, mtm);
+    let port = field("", 258.0, 242.0, 110.0, 24.0, mtm);
 
-    let endpoint_label = label("Destination IP", 24.0, 154.0, 120.0, 18.0, mtm);
-    let endpoint_hint = secondary_label("", 150.0, 154.0, 320.0, 18.0, mtm);
-    let ip1 = field("", 24.0, 124.0, 70.0, 28.0, mtm);
-    let ip2 = field("", 102.0, 124.0, 70.0, 28.0, mtm);
-    let ip3 = field("", 180.0, 124.0, 70.0, 28.0, mtm);
-    let ip4 = field("", 258.0, 124.0, 70.0, 28.0, mtm);
+    let endpoint_label = label("Destination IP", 24.0, 204.0, 120.0, 18.0, mtm);
+    let endpoint_hint = secondary_label("", 150.0, 204.0, 320.0, 18.0, mtm);
+    let ip1 = field("", 24.0, 172.0, 70.0, 28.0, mtm);
+    let ip2 = field("", 102.0, 172.0, 70.0, 28.0, mtm);
+    let ip3 = field("", 180.0, 172.0, 70.0, 28.0, mtm);
+    let ip4 = field("", 258.0, 172.0, 70.0, 28.0, mtm);
 
     let apply =
         unsafe { NSButton::buttonWithTitle_target_action(ns_string!("Apply"), None, None, mtm) };
-    set_frame(&apply, 386.0, 120.0, 90.0, 32.0);
+    set_frame(&apply, 386.0, 170.0, 90.0, 32.0);
 
-    let bottom_rule = separator(24.0, 96.0, 452.0, mtm);
-    let debug_title = label("Runtime", 24.0, 72.0, 120.0, 18.0, mtm);
-    let status_1 = secondary_label("", 24.0, 52.0, 452.0, 18.0, mtm);
-    let status_2 = secondary_label("", 24.0, 34.0, 452.0, 18.0, mtm);
-    let status_3 = secondary_label("", 24.0, 16.0, 452.0, 18.0, mtm);
-    let status_4 = secondary_label("", 24.0, 0.0, 452.0, 18.0, mtm);
+    let bottom_rule = separator(24.0, 144.0, 452.0, mtm);
+    let debug_title = label("Runtime", 24.0, 120.0, 120.0, 18.0, mtm);
+    let runtime_panel = panel_box(24.0, 22.0, 452.0, 90.0, mtm);
+    let status_1 = readout_label("", 40.0, 88.0, 420.0, 18.0, mtm);
+    let status_2 = readout_label("", 40.0, 66.0, 420.0, 18.0, mtm);
+    let status_3 = readout_label("", 40.0, 44.0, 420.0, 18.0, mtm);
+    let status_4 = readout_label("", 40.0, 22.0, 420.0, 18.0, mtm);
 
     let target = EditorTarget::new(
         controller,
         EditorControls {
+            root: root.clone(),
+            top_rule: top_rule.clone(),
+            runtime_panel: runtime_panel.clone(),
             enabled: enabled.clone(),
             mode: mode.clone(),
             transport: transport.clone(),
             channels: channels.clone(),
             port: port.clone(),
+            mode_badge: mode_badge.clone(),
             ip: [ip1.clone(), ip2.clone(), ip3.clone(), ip4.clone()],
             endpoint_label: endpoint_label.clone(),
             endpoint_hint: endpoint_hint.clone(),
@@ -422,6 +452,8 @@ fn build_editor_ui(controller: EditorControllerApi, mtm: MainThreadMarker) -> Ed
 
     unsafe {
         let target_obj: &AnyObject = &*(target.as_ref() as *const EditorTarget).cast();
+        enabled.setTarget(Some(target_obj));
+        enabled.setAction(Some(sel!(enabledChanged:)));
         mode.setTarget(Some(target_obj));
         mode.setAction(Some(sel!(modeChanged:)));
         transport.setTarget(Some(target_obj));
@@ -445,7 +477,7 @@ fn build_editor_ui(controller: EditorControllerApi, mtm: MainThreadMarker) -> Ed
     };
 
     root.addSubview(&title);
-    root.addSubview(&subtitle);
+    root.addSubview(&mode_badge);
     root.addSubview(&top_rule);
     root.addSubview(&enabled);
     root.addSubview(&mode_label);
@@ -465,6 +497,7 @@ fn build_editor_ui(controller: EditorControllerApi, mtm: MainThreadMarker) -> Ed
     root.addSubview(&apply);
     root.addSubview(&bottom_rule);
     root.addSubview(&debug_title);
+    root.addSubview(&runtime_panel);
     root.addSubview(&status_1);
     root.addSubview(&status_2);
     root.addSubview(&status_3);
@@ -556,6 +589,8 @@ fn sync_transport_semantics(target: &EditorTarget) {
         .ivars()
         .endpoint_hint
         .setStringValue(&NSString::from_str(hint_text));
+
+    sync_mode_appearance(target, mode);
 }
 
 fn parse_field_u32(field: &NSTextField) -> Option<u32> {
@@ -590,6 +625,20 @@ fn secondary_label(
     label
 }
 
+fn readout_label(
+    text: &str,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    mtm: MainThreadMarker,
+) -> Retained<NSTextField> {
+    let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
+    label.setTextColor(Some(panel_text_color().as_ref()));
+    set_frame(&label, x, y, width, height);
+    label
+}
+
 fn field(
     text: &str,
     x: f64,
@@ -608,6 +657,23 @@ fn field(
     field
 }
 
+fn latch_toggle_button(
+    text: &str,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    mtm: MainThreadMarker,
+) -> Retained<NSButton> {
+    let button = unsafe {
+        NSButton::buttonWithTitle_target_action(&NSString::from_str(text), None, None, mtm)
+    };
+    button.setButtonType(NSButtonType::PushOnPushOff);
+    button.setBezelStyle(NSBezelStyle::Push);
+    set_frame(&button, x, y, width, height);
+    button
+}
+
 fn set_frame(view: &NSView, x: f64, y: f64, width: f64, height: f64) {
     view.setFrameOrigin(NSPoint::new(x, y));
     view.setFrameSize(NSSize::new(width, height));
@@ -622,6 +688,21 @@ fn separator(x: f64, y: f64, width: f64, mtm: MainThreadMarker) -> Retained<NSVi
         layer.setBackgroundColor(Some(stroke.as_ref()));
     }
     line
+}
+
+fn panel_box(x: f64, y: f64, width: f64, height: f64, mtm: MainThreadMarker) -> Retained<NSView> {
+    let panel = NSView::new(mtm);
+    set_frame(&panel, x, y, width, height);
+    panel.setWantsLayer(true);
+    if let Some(layer) = panel.layer() {
+        let background = panel_field_background_color().CGColor();
+        let stroke = panel_rule_color().CGColor();
+        layer.setBackgroundColor(Some(background.as_ref()));
+        layer.setBorderColor(Some(stroke.as_ref()));
+        layer.setBorderWidth(1.0);
+        layer.setCornerRadius(10.0);
+    }
+    panel
 }
 
 fn fid_string_matches(value: FIDString, expected: FIDString) -> bool {
@@ -658,4 +739,81 @@ fn panel_secondary_text_color() -> Retained<NSColor> {
 
 fn panel_rule_color() -> Retained<NSColor> {
     NSColor::colorWithSRGBRed_green_blue_alpha(0.76, 0.73, 0.67, 1.0)
+}
+
+fn sync_mode_appearance(target: &EditorTarget, mode: StreamMode) {
+    let (badge_text, badge_color, background, rule, panel_fill) = match mode {
+        StreamMode::Send => (
+            "SEND",
+            send_badge_color(),
+            send_panel_background_color(),
+            send_rule_color(),
+            send_panel_fill_color(),
+        ),
+        StreamMode::Receive => (
+            "RECEIVE",
+            receive_badge_color(),
+            receive_panel_background_color(),
+            receive_rule_color(),
+            receive_panel_fill_color(),
+        ),
+    };
+
+    target
+        .ivars()
+        .mode_badge
+        .setStringValue(&NSString::from_str(badge_text));
+    target
+        .ivars()
+        .mode_badge
+        .setTextColor(Some(badge_color.as_ref()));
+
+    if let Some(layer) = target.ivars().root.layer() {
+        let cg = background.CGColor();
+        layer.setBackgroundColor(Some(cg.as_ref()));
+    }
+
+    if let Some(layer) = target.ivars().top_rule.layer() {
+        let cg = rule.CGColor();
+        layer.setBackgroundColor(Some(cg.as_ref()));
+    }
+
+    if let Some(layer) = target.ivars().runtime_panel.layer() {
+        let fill = panel_fill.CGColor();
+        let stroke = rule.CGColor();
+        layer.setBackgroundColor(Some(fill.as_ref()));
+        layer.setBorderColor(Some(stroke.as_ref()));
+    }
+}
+
+fn send_panel_background_color() -> Retained<NSColor> {
+    NSColor::colorWithSRGBRed_green_blue_alpha(0.93, 0.91, 0.86, 1.0)
+}
+
+fn receive_panel_background_color() -> Retained<NSColor> {
+    NSColor::colorWithSRGBRed_green_blue_alpha(0.90, 0.92, 0.90, 1.0)
+}
+
+fn send_panel_fill_color() -> Retained<NSColor> {
+    NSColor::colorWithSRGBRed_green_blue_alpha(0.98, 0.97, 0.94, 1.0)
+}
+
+fn receive_panel_fill_color() -> Retained<NSColor> {
+    NSColor::colorWithSRGBRed_green_blue_alpha(0.95, 0.97, 0.95, 1.0)
+}
+
+fn send_rule_color() -> Retained<NSColor> {
+    NSColor::colorWithSRGBRed_green_blue_alpha(0.76, 0.73, 0.67, 1.0)
+}
+
+fn receive_rule_color() -> Retained<NSColor> {
+    NSColor::colorWithSRGBRed_green_blue_alpha(0.63, 0.69, 0.65, 1.0)
+}
+
+fn send_badge_color() -> Retained<NSColor> {
+    NSColor::colorWithSRGBRed_green_blue_alpha(0.46, 0.31, 0.18, 1.0)
+}
+
+fn receive_badge_color() -> Retained<NSColor> {
+    NSColor::colorWithSRGBRed_green_blue_alpha(0.19, 0.34, 0.27, 1.0)
 }
