@@ -1,3 +1,4 @@
+use std::cell::UnsafeCell;
 use std::collections::VecDeque;
 use std::fs;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
@@ -385,27 +386,11 @@ struct ActiveStream {
 
 struct SenderWorker {
     tx: SyncSender<SentPacket>,
-    active: std::sync::Arc<AtomicBool>,
-    packets_sent: std::sync::Arc<AtomicU64>,
-    packets_dropped: std::sync::Arc<AtomicU64>,
     shutdown: std::sync::Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
 }
 
 impl SenderWorker {
-    fn try_send(&self, packet: SentPacket) {
-        match self.tx.try_send(packet) {
-            Ok(()) => {}
-            Err(TrySendError::Full(_)) => {
-                self.packets_dropped.fetch_add(1, Ordering::Relaxed);
-            }
-            Err(TrySendError::Disconnected(_)) => {
-                self.active.store(false, Ordering::Relaxed);
-                self.packets_dropped.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-    }
-
     fn stop(&mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
         if let Some(join) = self.join.take() {
@@ -450,14 +435,6 @@ struct DecodedSamples {
 }
 
 struct ReceiverWorker {
-    rx: Receiver<ReceiverPacket>,
-    active: std::sync::Arc<AtomicBool>,
-    packets_dropped: std::sync::Arc<AtomicU64>,
-    packets_invalid: std::sync::Arc<AtomicU64>,
-    packets_invalid_header: std::sync::Arc<AtomicU64>,
-    packets_invalid_format: std::sync::Arc<AtomicU64>,
-    packets_invalid_frame_mismatch: std::sync::Arc<AtomicU64>,
-    last_invalid_samples: std::sync::Arc<AtomicU64>,
     shutdown: std::sync::Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
 }
@@ -477,17 +454,35 @@ impl Drop for ReceiverWorker {
     }
 }
 
-fn spawn_sender_worker(stream: ActiveStream, sdp_path: PathBuf) -> SenderWorker {
-    let (tx, rx) = sync_channel::<SentPacket>(SEND_QUEUE_PACKETS);
-    let active = std::sync::Arc::new(AtomicBool::new(false));
-    let packets_sent = std::sync::Arc::new(AtomicU64::new(0));
-    let packets_dropped = std::sync::Arc::new(AtomicU64::new(0));
-    let shutdown = std::sync::Arc::new(AtomicBool::new(false));
+#[derive(Clone)]
+struct SenderWorkerStatus {
+    active: std::sync::Arc<AtomicBool>,
+    packets_sent: std::sync::Arc<AtomicU64>,
+    packets_dropped: std::sync::Arc<AtomicU64>,
+}
 
-    let thread_active = active.clone();
-    let thread_packets_sent = packets_sent.clone();
-    let thread_packets_dropped = packets_dropped.clone();
+#[derive(Clone)]
+struct ReceiverWorkerStatus {
+    active: std::sync::Arc<AtomicBool>,
+    packets_dropped: std::sync::Arc<AtomicU64>,
+    packets_invalid: std::sync::Arc<AtomicU64>,
+    packets_invalid_header: std::sync::Arc<AtomicU64>,
+    packets_invalid_format: std::sync::Arc<AtomicU64>,
+    packets_invalid_frame_mismatch: std::sync::Arc<AtomicU64>,
+    last_invalid_samples: std::sync::Arc<AtomicU64>,
+}
+
+fn spawn_sender_worker(
+    stream: ActiveStream,
+    sdp_path: PathBuf,
+    status: SenderWorkerStatus,
+) -> SenderWorker {
+    let (tx, rx) = sync_channel::<SentPacket>(SEND_QUEUE_PACKETS);
+    let shutdown = std::sync::Arc::new(AtomicBool::new(false));
     let thread_shutdown = shutdown.clone();
+    let thread_active = status.active.clone();
+    let thread_packets_sent = status.packets_sent.clone();
+    let thread_packets_dropped = status.packets_dropped.clone();
 
     let join = thread::spawn(move || {
         configure_thread_priority();
@@ -595,33 +590,25 @@ fn spawn_sender_worker(stream: ActiveStream, sdp_path: PathBuf) -> SenderWorker 
 
     SenderWorker {
         tx,
-        active,
-        packets_sent,
-        packets_dropped,
         shutdown,
         join: Some(join),
     }
 }
 
-fn spawn_receiver_worker(stream: ActiveStream) -> ReceiverWorker {
+fn spawn_receiver_worker(
+    stream: ActiveStream,
+    status: ReceiverWorkerStatus,
+) -> (ReceiverWorker, Receiver<ReceiverPacket>) {
     let (tx, rx) = sync_channel::<ReceiverPacket>(RECEIVE_QUEUE_PACKETS);
-    let active = std::sync::Arc::new(AtomicBool::new(false));
-    let packets_dropped = std::sync::Arc::new(AtomicU64::new(0));
-    let packets_invalid = std::sync::Arc::new(AtomicU64::new(0));
-    let packets_invalid_header = std::sync::Arc::new(AtomicU64::new(0));
-    let packets_invalid_format = std::sync::Arc::new(AtomicU64::new(0));
-    let packets_invalid_frame_mismatch = std::sync::Arc::new(AtomicU64::new(0));
-    let last_invalid_samples = std::sync::Arc::new(AtomicU64::new(0));
     let shutdown = std::sync::Arc::new(AtomicBool::new(false));
-
-    let thread_active = active.clone();
-    let thread_packets_dropped = packets_dropped.clone();
-    let thread_packets_invalid = packets_invalid.clone();
-    let thread_packets_invalid_header = packets_invalid_header.clone();
-    let thread_packets_invalid_format = packets_invalid_format.clone();
-    let thread_packets_invalid_frame_mismatch = packets_invalid_frame_mismatch.clone();
-    let thread_last_invalid_samples = last_invalid_samples.clone();
     let thread_shutdown = shutdown.clone();
+    let thread_active = status.active.clone();
+    let thread_packets_dropped = status.packets_dropped.clone();
+    let thread_packets_invalid = status.packets_invalid.clone();
+    let thread_packets_invalid_header = status.packets_invalid_header.clone();
+    let thread_packets_invalid_format = status.packets_invalid_format.clone();
+    let thread_packets_invalid_frame_mismatch = status.packets_invalid_frame_mismatch.clone();
+    let thread_last_invalid_samples = status.last_invalid_samples.clone();
 
     let join = thread::spawn(move || {
         configure_thread_priority();
@@ -706,41 +693,26 @@ fn spawn_receiver_worker(stream: ActiveStream) -> ReceiverWorker {
         thread_active.store(false, Ordering::Relaxed);
     });
 
-    ReceiverWorker {
+    (
+        ReceiverWorker {
+            shutdown,
+            join: Some(join),
+        },
         rx,
-        active,
-        packets_dropped,
-        packets_invalid,
-        packets_invalid_header,
-        packets_invalid_format,
-        packets_invalid_frame_mismatch,
-        last_invalid_samples,
-        shutdown,
-        join: Some(join),
-    }
+    )
 }
 
-struct SenderState {
+struct SenderControlState {
     stream: Option<ActiveStream>,
     worker: Option<SenderWorker>,
-    pending_packet: SentPacket,
-    pending_frames: usize,
-    sequence: u16,
-    timestamp: u32,
-    ssrc: u32,
     sdp_path: PathBuf,
 }
 
-impl SenderState {
+impl SenderControlState {
     fn new() -> Self {
         Self {
             stream: None,
             worker: None,
-            pending_packet: SentPacket::new(),
-            pending_frames: 0,
-            sequence: 0,
-            timestamp: 0,
-            ssrc: seed_ssrc(),
             sdp_path: std::env::temp_dir().join(SDP_FILE_NAME),
         }
     }
@@ -750,23 +722,59 @@ impl SenderState {
         if let Some(mut worker) = self.worker.take() {
             worker.stop();
         }
+    }
+
+    fn reconfigure(
+        &mut self,
+        candidate: ActiveStream,
+        status: SenderWorkerStatus,
+    ) -> SyncSender<SentPacket> {
+        if self.stream != Some(candidate) || self.worker.is_none() {
+            self.reset();
+            let worker = spawn_sender_worker(candidate, self.sdp_path.clone(), status);
+            self.stream = Some(candidate);
+            self.worker = Some(worker);
+        }
+
+        self.worker
+            .as_ref()
+            .expect("sender worker must exist after reconfigure")
+            .tx
+            .clone()
+    }
+}
+
+struct SenderAudioState {
+    stream: Option<ActiveStream>,
+    tx: Option<SyncSender<SentPacket>>,
+    pending_packet: SentPacket,
+    pending_frames: usize,
+    sequence: u16,
+    timestamp: u32,
+    ssrc: u32,
+}
+
+impl SenderAudioState {
+    fn new() -> Self {
+        Self {
+            stream: None,
+            tx: None,
+            pending_packet: SentPacket::new(),
+            pending_frames: 0,
+            sequence: 0,
+            timestamp: 0,
+            ssrc: seed_ssrc(),
+        }
+    }
+
+    fn reset_local(&mut self) {
+        self.stream = None;
+        self.tx = None;
         self.pending_packet.clear_payload();
         self.pending_frames = 0;
         self.sequence = 0;
         self.timestamp = 0;
         self.ssrc = seed_ssrc();
-    }
-
-    fn ensure_stream(&mut self, params: StreamParameters, level: StreamLevel) {
-        let candidate = ActiveStream { params, level };
-        if self.stream == Some(candidate) && self.worker.is_some() {
-            return;
-        }
-
-        self.reset();
-
-        self.worker = Some(spawn_sender_worker(candidate, self.sdp_path.clone()));
-        self.stream = Some(candidate);
     }
 
     fn push_block(
@@ -775,9 +783,9 @@ impl SenderState {
         level: StreamLevel,
         input_channels: &[Option<&[f32]>; MAX_CHANNELS],
         frames: usize,
+        dropped_counter: &AtomicU64,
     ) {
-        self.ensure_stream(params, level);
-        if self.worker.is_none() {
+        if self.tx.is_none() {
             return;
         }
 
@@ -795,13 +803,13 @@ impl SenderState {
 
             self.pending_frames += 1;
             if self.pending_frames == level.packet_frames() {
-                self.flush_packet(level.packet_frames() as u32);
+                self.flush_packet(level.packet_frames() as u32, dropped_counter);
             }
         }
     }
 
-    fn flush_packet(&mut self, packet_frames: u32) {
-        let Some(worker) = &self.worker else {
+    fn flush_packet(&mut self, packet_frames: u32, dropped_counter: &AtomicU64) {
+        let Some(tx) = &self.tx else {
             return;
         };
 
@@ -815,51 +823,88 @@ impl SenderState {
         packet.data[RTP_HEADER_SIZE..packet.len]
             .copy_from_slice(&self.pending_packet.data[RTP_HEADER_SIZE..self.pending_packet.len]);
 
-        worker.try_send(packet);
+        match tx.try_send(packet) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
+                dropped_counter.fetch_add(1, Ordering::Relaxed);
+            }
+        }
 
         self.sequence = self.sequence.wrapping_add(1);
         self.timestamp = self.timestamp.wrapping_add(packet_frames);
         self.pending_frames = 0;
         self.pending_packet.clear_payload();
     }
-
-    #[allow(dead_code)]
-    fn status(&self) -> SenderStatus {
-        let (active, packets_sent, packets_dropped) = self
-            .worker
-            .as_ref()
-            .map(|worker| {
-                (
-                    worker.active.load(Ordering::Relaxed),
-                    worker.packets_sent.load(Ordering::Relaxed),
-                    worker.packets_dropped.load(Ordering::Relaxed),
-                )
-            })
-            .unwrap_or((false, 0, 0));
-
-        SenderStatus {
-            active,
-            packets_sent,
-            packets_dropped,
-            queued_frames: self.pending_frames,
-        }
-    }
 }
 
 pub struct NetworkSender {
-    state: Mutex<SenderState>,
+    control: Mutex<SenderControlState>,
+    audio: UnsafeCell<SenderAudioState>,
+    reset_requested: AtomicBool,
+    active: std::sync::Arc<AtomicBool>,
+    packets_sent: std::sync::Arc<AtomicU64>,
+    packets_dropped: std::sync::Arc<AtomicU64>,
+    queued_frames: AtomicU64,
 }
+
+// Safety: only the real-time audio callback mutates `audio`, while reconfiguration and reset
+// happen via atomics plus the separate control mutex and never access the audio state directly.
+unsafe impl Sync for NetworkSender {}
 
 impl NetworkSender {
     pub fn new() -> Self {
         Self {
-            state: Mutex::new(SenderState::new()),
+            control: Mutex::new(SenderControlState::new()),
+            audio: UnsafeCell::new(SenderAudioState::new()),
+            reset_requested: AtomicBool::new(false),
+            active: std::sync::Arc::new(AtomicBool::new(false)),
+            packets_sent: std::sync::Arc::new(AtomicU64::new(0)),
+            packets_dropped: std::sync::Arc::new(AtomicU64::new(0)),
+            queued_frames: AtomicU64::new(0),
         }
     }
 
+    fn worker_status(&self) -> SenderWorkerStatus {
+        SenderWorkerStatus {
+            active: self.active.clone(),
+            packets_sent: self.packets_sent.clone(),
+            packets_dropped: self.packets_dropped.clone(),
+        }
+    }
+
+    fn clear_status(&self) {
+        self.active.store(false, Ordering::Relaxed);
+        self.packets_sent.store(0, Ordering::Relaxed);
+        self.packets_dropped.store(0, Ordering::Relaxed);
+        self.queued_frames.store(0, Ordering::Relaxed);
+    }
+
+    #[allow(clippy::mut_from_ref)]
+    fn audio_state_mut(&self) -> &mut SenderAudioState {
+        // Safety: `process` is the sole caller on the audio thread, and non-audio threads never
+        // dereference `audio`; they only signal reset via atomics and reconfigure worker state.
+        unsafe { &mut *self.audio.get() }
+    }
+
+    fn ensure_stream(&self, audio: &mut SenderAudioState, candidate: ActiveStream) {
+        if audio.stream == Some(candidate) && audio.tx.is_some() {
+            return;
+        }
+
+        audio.reset_local();
+        let Ok(mut control) = self.control.lock() else {
+            return;
+        };
+        let tx = control.reconfigure(candidate, self.worker_status());
+        audio.stream = Some(candidate);
+        audio.tx = Some(tx);
+    }
+
     pub fn reset(&self) {
-        if let Ok(mut state) = self.state.lock() {
-            state.reset();
+        self.reset_requested.store(true, Ordering::Relaxed);
+        self.clear_status();
+        if let Ok(mut control) = self.control.lock() {
+            control.reset();
         }
     }
 
@@ -870,31 +915,80 @@ impl NetworkSender {
         input_channels: &[Option<&[f32]>; MAX_CHANNELS],
         frames: usize,
     ) {
+        let audio = self.audio_state_mut();
+        if self.reset_requested.swap(false, Ordering::Relaxed) {
+            audio.reset_local();
+        }
+
         if !params.enabled || !params.sane_destination() {
+            self.queued_frames.store(0, Ordering::Relaxed);
             return;
         }
 
         let Some(level) = stream_level(sample_rate_hz, params.channels) else {
+            self.queued_frames.store(0, Ordering::Relaxed);
             return;
         };
 
-        if let Ok(mut state) = self.state.lock() {
-            state.push_block(params, level, input_channels, frames);
-        }
+        self.ensure_stream(audio, ActiveStream { params, level });
+        audio.push_block(
+            params,
+            level,
+            input_channels,
+            frames,
+            self.packets_dropped.as_ref(),
+        );
+        self.queued_frames
+            .store(audio.pending_frames as u64, Ordering::Relaxed);
     }
 
     #[allow(dead_code)]
     pub fn status_snapshot(&self) -> SenderStatus {
-        self.state
-            .lock()
-            .map(|state| state.status())
-            .unwrap_or_default()
+        SenderStatus {
+            active: self.active.load(Ordering::Relaxed),
+            packets_sent: self.packets_sent.load(Ordering::Relaxed),
+            packets_dropped: self.packets_dropped.load(Ordering::Relaxed),
+            queued_frames: self.queued_frames.load(Ordering::Relaxed) as usize,
+        }
     }
 }
 
-struct ReceiverState {
+struct ReceiverControlState {
     stream: Option<ActiveStream>,
     worker: Option<ReceiverWorker>,
+}
+
+impl ReceiverControlState {
+    fn new() -> Self {
+        Self {
+            stream: None,
+            worker: None,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.stream = None;
+        if let Some(mut worker) = self.worker.take() {
+            worker.stop();
+        }
+    }
+
+    fn reconfigure(
+        &mut self,
+        candidate: ActiveStream,
+        status: ReceiverWorkerStatus,
+    ) -> Receiver<ReceiverPacket> {
+        self.reset();
+        let (worker, rx) = spawn_receiver_worker(candidate, status);
+        self.stream = Some(candidate);
+        self.worker = Some(worker);
+        rx
+    }
+}
+
+struct ReceiverAudioState {
+    stream: Option<ActiveStream>,
+    worker_rx: Option<Receiver<ReceiverPacket>>,
     packet_queue: VecDeque<ReceiverPacket>,
     front_packet_offset: usize,
     queued_samples: usize,
@@ -911,11 +1005,11 @@ struct ReceiverState {
     drift_corrections: u64,
 }
 
-impl ReceiverState {
+impl ReceiverAudioState {
     fn new() -> Self {
         Self {
             stream: None,
-            worker: None,
+            worker_rx: None,
             packet_queue: VecDeque::with_capacity(MAX_BUFFER_PACKETS),
             front_packet_offset: 0,
             queued_samples: 0,
@@ -933,11 +1027,9 @@ impl ReceiverState {
         }
     }
 
-    fn reset(&mut self) {
+    fn reset_local(&mut self) {
         self.stream = None;
-        if let Some(mut worker) = self.worker.take() {
-            worker.stop();
-        }
+        self.worker_rx = None;
         self.packet_queue.clear();
         self.front_packet_offset = 0;
         self.queued_samples = 0;
@@ -954,24 +1046,13 @@ impl ReceiverState {
         self.drift_corrections = 0;
     }
 
-    fn ensure_stream(&mut self, params: StreamParameters, level: StreamLevel) {
-        let candidate = ActiveStream { params, level };
-        if self.stream == Some(candidate) && self.worker.is_some() {
-            return;
-        }
-
-        self.reset();
-        self.worker = Some(spawn_receiver_worker(candidate));
-        self.stream = Some(candidate);
-    }
-
     fn receive_into_queue(&mut self, params: StreamParameters, level: StreamLevel) {
         for _ in 0..MAX_PACKETS_PER_CALLBACK {
-            let Some(worker) = &self.worker else {
+            let Some(worker_rx) = self.worker_rx.as_ref() else {
                 return;
             };
 
-            match worker.rx.try_recv() {
+            match worker_rx.try_recv() {
                 Ok(packet) => {
                     let Some(missing_packets) = self.accept_sequence(Some(packet.sequence)) else {
                         continue;
@@ -986,17 +1067,7 @@ impl ReceiverState {
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
-                    if let Some(mut worker) = self.worker.take() {
-                        worker.stop();
-                    }
-                    self.stream = None;
-                    self.packet_queue.clear();
-                    self.front_packet_offset = 0;
-                    self.queued_samples = 0;
-                    self.last_frame.fill(0.0);
-                    self.primed = false;
-                    self.last_sequence = None;
-                    self.last_packet_at = None;
+                    self.reset_local();
                     break;
                 }
             }
@@ -1085,11 +1156,9 @@ impl ReceiverState {
         end_frame: usize,
         value: f32,
     ) {
-        for frame_index in start_frame..end_frame {
-            for output_channel in output_channels.iter_mut().take(channels) {
-                if let Some(channel) = output_channel.as_deref_mut() {
-                    channel[frame_index] = value;
-                }
+        for output_channel in output_channels.iter_mut().take(channels) {
+            if let Some(channel) = output_channel.as_deref_mut() {
+                channel[start_frame..end_frame].fill(value);
             }
         }
     }
@@ -1137,7 +1206,6 @@ impl ReceiverState {
         output_channels: &mut [Option<&mut [f32]>; MAX_CHANNELS],
         frames: usize,
     ) {
-        self.ensure_stream(params, level);
         self.handle_idle_timeout();
         self.receive_into_queue(params, level);
 
@@ -1151,6 +1219,7 @@ impl ReceiverState {
         self.target_buffer_samples = target_buffer_samples(level, channels, frames);
         if !self.primed {
             if self.queued_samples < self.target_buffer_samples {
+                self.output_constant(output_channels, channels, 0, frames, 0.0);
                 return;
             }
             self.primed = true;
@@ -1225,54 +1294,6 @@ impl ReceiverState {
         }
     }
 
-    #[allow(dead_code)]
-    fn status(&self) -> ReceiverStatus {
-        let (
-            active,
-            packets_dropped,
-            packets_invalid,
-            packets_invalid_header,
-            packets_invalid_format,
-            packets_invalid_frame_mismatch,
-            last_invalid_samples,
-        ) = self
-            .worker
-            .as_ref()
-            .map(|worker| {
-                (
-                    worker.active.load(Ordering::Relaxed),
-                    worker.packets_dropped.load(Ordering::Relaxed),
-                    worker.packets_invalid.load(Ordering::Relaxed),
-                    worker.packets_invalid_header.load(Ordering::Relaxed),
-                    worker.packets_invalid_format.load(Ordering::Relaxed),
-                    worker
-                        .packets_invalid_frame_mismatch
-                        .load(Ordering::Relaxed),
-                    worker.last_invalid_samples.load(Ordering::Relaxed) as usize,
-                )
-            })
-            .unwrap_or((false, 0, 0, 0, 0, 0, 0));
-
-        ReceiverStatus {
-            active,
-            primed: self.primed,
-            queued_samples: self.queued_samples,
-            target_buffer_samples: self.target_buffer_samples,
-            last_callback_frames: self.last_callback_frames,
-            packets_received: self.packets_received,
-            packets_dropped,
-            packets_invalid,
-            packets_invalid_header,
-            packets_invalid_format,
-            packets_invalid_frame_mismatch,
-            last_invalid_samples,
-            packets_lost: self.packets_lost,
-            packets_out_of_order: self.packets_out_of_order,
-            underruns: self.underruns,
-            drift_corrections: self.drift_corrections,
-        }
-    }
-
     fn pop_sample(&mut self) -> Option<f32> {
         loop {
             let front = self.packet_queue.front_mut()?;
@@ -1296,19 +1317,133 @@ impl ReceiverState {
 }
 
 pub struct NetworkReceiver {
-    state: Mutex<ReceiverState>,
+    control: Mutex<ReceiverControlState>,
+    audio: UnsafeCell<ReceiverAudioState>,
+    reset_requested: AtomicBool,
+    active: std::sync::Arc<AtomicBool>,
+    primed: AtomicBool,
+    queued_samples: AtomicU64,
+    target_buffer_samples: AtomicU64,
+    last_callback_frames: AtomicU64,
+    packets_received: AtomicU64,
+    packets_dropped: std::sync::Arc<AtomicU64>,
+    packets_invalid: std::sync::Arc<AtomicU64>,
+    packets_invalid_header: std::sync::Arc<AtomicU64>,
+    packets_invalid_format: std::sync::Arc<AtomicU64>,
+    packets_invalid_frame_mismatch: std::sync::Arc<AtomicU64>,
+    last_invalid_samples: std::sync::Arc<AtomicU64>,
+    packets_lost: AtomicU64,
+    packets_out_of_order: AtomicU64,
+    underruns: AtomicU64,
+    drift_corrections: AtomicU64,
 }
+
+// Safety: only the audio callback mutates `audio`. Other threads coordinate resets and worker
+// lifetime through atomics plus the control mutex and never touch the callback-owned state.
+unsafe impl Sync for NetworkReceiver {}
 
 impl NetworkReceiver {
     pub fn new() -> Self {
         Self {
-            state: Mutex::new(ReceiverState::new()),
+            control: Mutex::new(ReceiverControlState::new()),
+            audio: UnsafeCell::new(ReceiverAudioState::new()),
+            reset_requested: AtomicBool::new(false),
+            active: std::sync::Arc::new(AtomicBool::new(false)),
+            primed: AtomicBool::new(false),
+            queued_samples: AtomicU64::new(0),
+            target_buffer_samples: AtomicU64::new(0),
+            last_callback_frames: AtomicU64::new(0),
+            packets_received: AtomicU64::new(0),
+            packets_dropped: std::sync::Arc::new(AtomicU64::new(0)),
+            packets_invalid: std::sync::Arc::new(AtomicU64::new(0)),
+            packets_invalid_header: std::sync::Arc::new(AtomicU64::new(0)),
+            packets_invalid_format: std::sync::Arc::new(AtomicU64::new(0)),
+            packets_invalid_frame_mismatch: std::sync::Arc::new(AtomicU64::new(0)),
+            last_invalid_samples: std::sync::Arc::new(AtomicU64::new(0)),
+            packets_lost: AtomicU64::new(0),
+            packets_out_of_order: AtomicU64::new(0),
+            underruns: AtomicU64::new(0),
+            drift_corrections: AtomicU64::new(0),
         }
     }
 
+    fn worker_status(&self) -> ReceiverWorkerStatus {
+        ReceiverWorkerStatus {
+            active: self.active.clone(),
+            packets_dropped: self.packets_dropped.clone(),
+            packets_invalid: self.packets_invalid.clone(),
+            packets_invalid_header: self.packets_invalid_header.clone(),
+            packets_invalid_format: self.packets_invalid_format.clone(),
+            packets_invalid_frame_mismatch: self.packets_invalid_frame_mismatch.clone(),
+            last_invalid_samples: self.last_invalid_samples.clone(),
+        }
+    }
+
+    fn clear_status(&self) {
+        self.active.store(false, Ordering::Relaxed);
+        self.primed.store(false, Ordering::Relaxed);
+        self.queued_samples.store(0, Ordering::Relaxed);
+        self.target_buffer_samples.store(0, Ordering::Relaxed);
+        self.last_callback_frames.store(0, Ordering::Relaxed);
+        self.packets_received.store(0, Ordering::Relaxed);
+        self.packets_dropped.store(0, Ordering::Relaxed);
+        self.packets_invalid.store(0, Ordering::Relaxed);
+        self.packets_invalid_header.store(0, Ordering::Relaxed);
+        self.packets_invalid_format.store(0, Ordering::Relaxed);
+        self.packets_invalid_frame_mismatch
+            .store(0, Ordering::Relaxed);
+        self.last_invalid_samples.store(0, Ordering::Relaxed);
+        self.packets_lost.store(0, Ordering::Relaxed);
+        self.packets_out_of_order.store(0, Ordering::Relaxed);
+        self.underruns.store(0, Ordering::Relaxed);
+        self.drift_corrections.store(0, Ordering::Relaxed);
+    }
+
+    fn publish_audio_status(&self, audio: &ReceiverAudioState) {
+        self.primed.store(audio.primed, Ordering::Relaxed);
+        self.queued_samples
+            .store(audio.queued_samples as u64, Ordering::Relaxed);
+        self.target_buffer_samples
+            .store(audio.target_buffer_samples as u64, Ordering::Relaxed);
+        self.last_callback_frames
+            .store(audio.last_callback_frames as u64, Ordering::Relaxed);
+        self.packets_received
+            .store(audio.packets_received, Ordering::Relaxed);
+        self.packets_lost
+            .store(audio.packets_lost, Ordering::Relaxed);
+        self.packets_out_of_order
+            .store(audio.packets_out_of_order, Ordering::Relaxed);
+        self.underruns.store(audio.underruns, Ordering::Relaxed);
+        self.drift_corrections
+            .store(audio.drift_corrections, Ordering::Relaxed);
+    }
+
+    #[allow(clippy::mut_from_ref)]
+    fn audio_state_mut(&self) -> &mut ReceiverAudioState {
+        // Safety: `process` is the only caller on the audio thread, and non-audio threads only
+        // signal resets or replace worker lifetime through the separate control state.
+        unsafe { &mut *self.audio.get() }
+    }
+
+    fn ensure_stream(&self, audio: &mut ReceiverAudioState, candidate: ActiveStream) {
+        if audio.stream == Some(candidate) && audio.worker_rx.is_some() {
+            return;
+        }
+
+        audio.reset_local();
+        let Ok(mut control) = self.control.lock() else {
+            return;
+        };
+        let rx = control.reconfigure(candidate, self.worker_status());
+        audio.stream = Some(candidate);
+        audio.worker_rx = Some(rx);
+    }
+
     pub fn reset(&self) {
-        if let Ok(mut state) = self.state.lock() {
-            state.reset();
+        self.reset_requested.store(true, Ordering::Relaxed);
+        self.clear_status();
+        if let Ok(mut control) = self.control.lock() {
+            control.reset();
         }
     }
 
@@ -1319,31 +1454,62 @@ impl NetworkReceiver {
         output_channels: &mut [Option<&mut [f32]>; MAX_CHANNELS],
         frames: usize,
     ) {
-        for channel in output_channels.iter_mut() {
-            if let Some(buffer) = channel.as_deref_mut() {
-                buffer.fill(0.0);
-            }
+        let audio = self.audio_state_mut();
+        if self.reset_requested.swap(false, Ordering::Relaxed) {
+            audio.reset_local();
         }
 
         if !params.enabled || !params.sane_listener() {
+            zero_all_outputs(output_channels);
+            self.publish_audio_status(audio);
             return;
         }
 
         let Some(level) = stream_level(sample_rate_hz, params.channels) else {
+            zero_all_outputs(output_channels);
+            self.publish_audio_status(audio);
             return;
         };
 
-        if let Ok(mut state) = self.state.lock() {
-            state.pull_block(params, level, output_channels, frames);
+        self.ensure_stream(audio, ActiveStream { params, level });
+        if audio.worker_rx.is_some() {
+            audio.pull_block(params, level, output_channels, frames);
+        } else {
+            zero_all_outputs(output_channels);
         }
+        self.publish_audio_status(audio);
     }
 
     #[allow(dead_code)]
     pub fn status_snapshot(&self) -> ReceiverStatus {
-        self.state
-            .lock()
-            .map(|state| state.status())
-            .unwrap_or_default()
+        ReceiverStatus {
+            active: self.active.load(Ordering::Relaxed),
+            primed: self.primed.load(Ordering::Relaxed),
+            queued_samples: self.queued_samples.load(Ordering::Relaxed) as usize,
+            target_buffer_samples: self.target_buffer_samples.load(Ordering::Relaxed) as usize,
+            last_callback_frames: self.last_callback_frames.load(Ordering::Relaxed) as usize,
+            packets_received: self.packets_received.load(Ordering::Relaxed),
+            packets_dropped: self.packets_dropped.load(Ordering::Relaxed),
+            packets_invalid: self.packets_invalid.load(Ordering::Relaxed),
+            packets_invalid_header: self.packets_invalid_header.load(Ordering::Relaxed),
+            packets_invalid_format: self.packets_invalid_format.load(Ordering::Relaxed),
+            packets_invalid_frame_mismatch: self
+                .packets_invalid_frame_mismatch
+                .load(Ordering::Relaxed),
+            last_invalid_samples: self.last_invalid_samples.load(Ordering::Relaxed) as usize,
+            packets_lost: self.packets_lost.load(Ordering::Relaxed),
+            packets_out_of_order: self.packets_out_of_order.load(Ordering::Relaxed),
+            underruns: self.underruns.load(Ordering::Relaxed),
+            drift_corrections: self.drift_corrections.load(Ordering::Relaxed),
+        }
+    }
+}
+
+fn zero_all_outputs(output_channels: &mut [Option<&mut [f32]>; MAX_CHANNELS]) {
+    for channel in output_channels.iter_mut() {
+        if let Some(buffer) = channel.as_deref_mut() {
+            buffer.fill(0.0);
+        }
     }
 }
 
@@ -1807,7 +1973,7 @@ mod tests {
 
     #[test]
     fn concealment_packets_repeat_last_frame() {
-        let mut state = ReceiverState::new();
+        let mut state = ReceiverAudioState::new();
         state.last_frame[0] = 0.75;
         state.last_frame[1] = -0.5;
         state.enqueue_concealment_packets(1, StreamLevel::A48k, 2);
@@ -1854,7 +2020,7 @@ mod tests {
 
     #[test]
     fn stalled_receiver_detects_missing_source() {
-        let mut state = ReceiverState::new();
+        let mut state = ReceiverAudioState::new();
         state.last_frame[0] = 0.75;
         state.primed = true;
         state.last_packet_at =
@@ -1865,7 +2031,7 @@ mod tests {
 
     #[test]
     fn clear_stalled_stream_flushes_buffer_and_mutes() {
-        let mut state = ReceiverState::new();
+        let mut state = ReceiverAudioState::new();
         state.queued_samples = 128;
         state.primed = true;
         state.last_frame[0] = 0.5;
