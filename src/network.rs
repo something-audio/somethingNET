@@ -385,7 +385,7 @@ struct ActiveStream {
 }
 
 struct SenderWorker {
-    tx: SyncSender<SentPacket>,
+    tx: SyncSender<Box<SentPacket>>,
     shutdown: std::sync::Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
 }
@@ -476,8 +476,9 @@ fn spawn_sender_worker(
     stream: ActiveStream,
     sdp_path: PathBuf,
     status: SenderWorkerStatus,
-) -> SenderWorker {
-    let (tx, rx) = sync_channel::<SentPacket>(SEND_QUEUE_PACKETS);
+) -> (SenderWorker, Receiver<Box<SentPacket>>) {
+    let (tx, rx) = sync_channel::<Box<SentPacket>>(SEND_QUEUE_PACKETS);
+    let (recycle_tx, recycle_rx) = sync_channel::<Box<SentPacket>>(SEND_QUEUE_PACKETS);
     let shutdown = std::sync::Arc::new(AtomicBool::new(false));
     let thread_shutdown = shutdown.clone();
     let thread_active = status.active.clone();
@@ -510,7 +511,7 @@ fn spawn_sender_worker(
             stream.params.channels,
         );
         thread_active.store(true, Ordering::Relaxed);
-        let mut backlog = VecDeque::<SentPacket>::with_capacity(MAX_SENDER_BACKLOG_PACKETS);
+        let mut backlog = VecDeque::<Box<SentPacket>>::with_capacity(MAX_SENDER_BACKLOG_PACKETS);
         let mut primed = false;
         let mut next_send_at: Option<Instant> = None;
 
@@ -558,7 +559,10 @@ fn spawn_sender_worker(
                     if socket.send(&packet.data[..packet.len]).is_ok() {
                         thread_packets_sent.fetch_add(1, Ordering::Relaxed);
                     }
-                    backlog.pop_front();
+                    if let Some(mut packet) = backlog.pop_front() {
+                        packet.clear_payload();
+                        let _ = recycle_tx.try_send(packet);
+                    }
                     let scheduled =
                         next_send_at.unwrap_or_else(Instant::now) + stream.level.packet_interval();
                     next_send_at = Some(scheduled);
@@ -575,10 +579,12 @@ fn spawn_sender_worker(
                 }
                 Err(RecvTimeoutError::Timeout) => continue,
                 Err(RecvTimeoutError::Disconnected) => {
-                    while let Some(packet) = backlog.pop_front() {
+                    while let Some(mut packet) = backlog.pop_front() {
                         if socket.send(&packet.data[..packet.len]).is_ok() {
                             thread_packets_sent.fetch_add(1, Ordering::Relaxed);
                         }
+                        packet.clear_payload();
+                        let _ = recycle_tx.try_send(packet);
                     }
                     break;
                 }
@@ -588,11 +594,14 @@ fn spawn_sender_worker(
         thread_active.store(false, Ordering::Relaxed);
     });
 
-    SenderWorker {
-        tx,
-        shutdown,
-        join: Some(join),
-    }
+    (
+        SenderWorker {
+            tx,
+            shutdown,
+            join: Some(join),
+        },
+        recycle_rx,
+    )
 }
 
 fn spawn_receiver_worker(
@@ -728,26 +737,27 @@ impl SenderControlState {
         &mut self,
         candidate: ActiveStream,
         status: SenderWorkerStatus,
-    ) -> SyncSender<SentPacket> {
-        if self.stream != Some(candidate) || self.worker.is_none() {
-            self.reset();
-            let worker = spawn_sender_worker(candidate, self.sdp_path.clone(), status);
-            self.stream = Some(candidate);
-            self.worker = Some(worker);
-        }
-
-        self.worker
-            .as_ref()
-            .expect("sender worker must exist after reconfigure")
-            .tx
-            .clone()
+    ) -> (SyncSender<Box<SentPacket>>, Receiver<Box<SentPacket>>) {
+        self.reset();
+        let (worker, recycle_rx) = spawn_sender_worker(candidate, self.sdp_path.clone(), status);
+        self.stream = Some(candidate);
+        self.worker = Some(worker);
+        (
+            self.worker
+                .as_ref()
+                .expect("sender worker must exist after reconfigure")
+                .tx
+                .clone(),
+            recycle_rx,
+        )
     }
 }
 
 struct SenderAudioState {
     stream: Option<ActiveStream>,
-    tx: Option<SyncSender<SentPacket>>,
-    pending_packet: SentPacket,
+    tx: Option<SyncSender<Box<SentPacket>>>,
+    recycle_rx: Option<Receiver<Box<SentPacket>>>,
+    pending_packet: Box<SentPacket>,
     pending_frames: usize,
     sequence: u16,
     timestamp: u32,
@@ -759,7 +769,8 @@ impl SenderAudioState {
         Self {
             stream: None,
             tx: None,
-            pending_packet: SentPacket::new(),
+            recycle_rx: None,
+            pending_packet: Box::new(SentPacket::new()),
             pending_frames: 0,
             sequence: 0,
             timestamp: 0,
@@ -770,11 +781,25 @@ impl SenderAudioState {
     fn reset_local(&mut self) {
         self.stream = None;
         self.tx = None;
+        self.recycle_rx = None;
         self.pending_packet.clear_payload();
         self.pending_frames = 0;
         self.sequence = 0;
         self.timestamp = 0;
         self.ssrc = seed_ssrc();
+    }
+
+    fn recycled_or_fresh(&mut self) -> Box<SentPacket> {
+        let Some(recycle_rx) = self.recycle_rx.as_ref() else {
+            return Box::new(SentPacket::new());
+        };
+        match recycle_rx.try_recv() {
+            Ok(mut packet) => {
+                packet.clear_payload();
+                packet
+            }
+            Err(TryRecvError::Empty | TryRecvError::Disconnected) => Box::new(SentPacket::new()),
+        }
     }
 
     fn push_block(
@@ -809,23 +834,24 @@ impl SenderAudioState {
     }
 
     fn flush_packet(&mut self, packet_frames: u32, dropped_counter: &AtomicU64) {
-        let Some(tx) = &self.tx else {
+        let Some(tx) = self.tx.clone() else {
             return;
         };
 
-        let mut packet = SentPacket::new();
-        packet.len = self.pending_packet.len;
-        packet.data[0] = 0x80;
-        packet.data[1] = PAYLOAD_TYPE_L24 & 0x7f;
-        packet.data[2..4].copy_from_slice(&self.sequence.to_be_bytes());
-        packet.data[4..8].copy_from_slice(&self.timestamp.to_be_bytes());
-        packet.data[8..12].copy_from_slice(&self.ssrc.to_be_bytes());
-        packet.data[RTP_HEADER_SIZE..packet.len]
-            .copy_from_slice(&self.pending_packet.data[RTP_HEADER_SIZE..self.pending_packet.len]);
+        self.pending_packet.data[0] = 0x80;
+        self.pending_packet.data[1] = PAYLOAD_TYPE_L24 & 0x7f;
+        self.pending_packet.data[2..4].copy_from_slice(&self.sequence.to_be_bytes());
+        self.pending_packet.data[4..8].copy_from_slice(&self.timestamp.to_be_bytes());
+        self.pending_packet.data[8..12].copy_from_slice(&self.ssrc.to_be_bytes());
+
+        let replacement = self.recycled_or_fresh();
+        let packet = std::mem::replace(&mut self.pending_packet, replacement);
 
         match tx.try_send(packet) {
             Ok(()) => {}
-            Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
+            Err(TrySendError::Full(mut packet)) | Err(TrySendError::Disconnected(mut packet)) => {
+                packet.clear_payload();
+                self.pending_packet = packet;
                 dropped_counter.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -895,9 +921,10 @@ impl NetworkSender {
         let Ok(mut control) = self.control.lock() else {
             return;
         };
-        let tx = control.reconfigure(candidate, self.worker_status());
+        let (tx, recycle_rx) = control.reconfigure(candidate, self.worker_status());
         audio.stream = Some(candidate);
         audio.tx = Some(tx);
+        audio.recycle_rx = Some(recycle_rx);
     }
 
     pub fn reset(&self) {
