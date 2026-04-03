@@ -191,7 +191,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     root = repo_root()
-    version = args.version or package_version(root)
+    version = (args.version or package_version(root)).lstrip("v")
     target_dir = Path(args.target_dir).resolve()
     bundle_root = Path(args.bundle_root).resolve()
 

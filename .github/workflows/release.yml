@@ -1,0 +1,91 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-packages:
+    name: Package ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: macos
+            archive_name: SomethingNet-macos.zip
+          - os: windows-latest
+            platform: windows
+            archive_name: SomethingNet-windows.zip
+          - os: ubuntu-latest
+            platform: linux
+            archive_name: SomethingNet-linux.zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Build release
+        run: cargo build --release
+
+      - name: Package VST3 bundle
+        shell: bash
+        run: |
+          python scripts/package_vst3.py \
+            --platform "${{ matrix.platform }}" \
+            --bundle-root "dist/SomethingNet.vst3" \
+            --archive "dist/${{ matrix.archive_name }}" \
+            --version "${{ github.ref_name }}"
+
+      - name: Upload packaged artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}-package
+          path: dist/${{ matrix.archive_name }}
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub release
+    runs-on: ubuntu-latest
+    needs: build-packages
+
+    steps:
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Flatten release assets
+        run: |
+          mkdir -p release-upload
+          find release-assets -type f -name '*.zip' -exec cp {} release-upload/ \;
+
+      - name: Generate checksums
+        run: |
+          cd release-upload
+          sha256sum *.zip > SHA256SUMS.txt
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes "Automated release for $TAG"
+          fi
+          gh release upload "$TAG" release-upload/* --clobber

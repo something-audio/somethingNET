@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build-test:
+    name: ${{ matrix.os }} / ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            archive_name: SomethingNet-linux-ci.zip
+          - os: windows-latest
+            platform: windows
+            archive_name: SomethingNet-windows-ci.zip
+          - os: macos-latest
+            platform: macos
+            archive_name: SomethingNet-macos-ci.zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Build release
+        run: cargo build --release
+
+      - name: Run tests
+        run: cargo test
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -W clippy::all
+
+      - name: Package VST3 bundle
+        shell: bash
+        run: |
+          python scripts/package_vst3.py \
+            --platform "${{ matrix.platform }}" \
+            --bundle-root "dist/SomethingNet.vst3" \
+            --archive "dist/${{ matrix.archive_name }}"
+
+      - name: Upload CI package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}-ci-package
+          path: dist/${{ matrix.archive_name }}
+          if-no-files-found: error

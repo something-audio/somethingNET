@@ -4,16 +4,16 @@
 
 # SomethingNet
 
-SomethingNet is a private Rust VST3 plugin from `Something Audio` for moving multichannel audio between creative tools over a network.
+SomethingNet is an open-source Rust VST3 plugin for sending and receiving multichannel audio over IP between creative tools and DAWs.
 
 The current target workflow is:
 
 - send audio from TouchDesigner into REAPER
-- receive audio in REAPER with low latency and stable multichannel playback
-- support direct unicast and multicast-style routing
+- receive audio in REAPER with low-latency, stable multichannel playback
+- support both direct unicast and multicast-style routing
 - stay close to SMPTE ST 2110-30 transport conventions where practical
 
-## What it does
+## Overview
 
 SomethingNet runs as either a sender or receiver inside a VST3 host.
 
@@ -21,11 +21,9 @@ SomethingNet runs as either a sender or receiver inside a VST3 host.
 - `Receive` mode listens for that RTP stream and renders it to the plugin outputs
 - supports up to `16` channels per stream today
 - supports `Unicast` and `Multicast` transport selection
-- includes a native macOS editor intended to work in both REAPER and TouchDesigner
+- includes a native macOS editor designed to work in both REAPER and TouchDesigner
 
-## Transport model
-
-The plugin uses RTP with 24-bit linear PCM (`L24`) over UDP.
+The transport uses RTP with 24-bit linear PCM (`L24`) over UDP.
 
 Supported operating modes:
 
@@ -35,7 +33,7 @@ Supported operating modes:
 
 Standards notes:
 
-- `48 kHz` transport is the main ST 2110-30 / AES67-aligned path
+- `48 kHz` is the main ST 2110-30 / AES67-aligned path
 - `44.1 kHz` is supported intentionally, but it is not ST 2110-30 compliant
 - higher channel counts above classic ST 2110-30 profile limits are supported as an engineering choice, with warning text surfaced in the plugin status
 
@@ -43,32 +41,29 @@ The sender also writes an SDP file to the system temp directory:
 
 - `somethingnet.sdp`
 
-## Current status
+## Current Status
 
-Implemented:
+- [x] Rust VST3 plugin built on the [`vst3`](https://crates.io/crates/vst3/0.3.0) crate
+- [x] Sender and receiver modes
+- [x] Unicast and multicast transport selection
+- [x] RTP/L24 packetization and decode
+- [x] Receiver buffering, concealment, and drift-tolerant playout control
+- [x] Background sender and receiver worker threads
+- [x] Native macOS GUI
+- [x] TouchDesigner -> REAPER workflow validation
+- [x] Support for up to `16` channels per stream
+- [ ] PTP clocking
+- [ ] NMOS / control-plane discovery
+- [ ] Full ST 2110 system integration
+- [ ] Windows-specific QoS handling
+- [x] Cross-platform release automation checked into the repo
 
-- Rust VST3 plugin built on the [`vst3`](https://crates.io/crates/vst3/0.3.0) crate
-- sender and receiver modes
-- unicast and multicast transport selection
-- RTP/L24 packetization and decode
-- receiver buffering, concealment, and drift-tolerant playout control
-- background sender/receiver worker threads
-- macOS native GUI
-- TouchDesigner -> REAPER workflow validation
-
-Not implemented yet:
-
-- PTP clocking
-- NMOS / control-plane discovery
-- full ST 2110 system integration
-- Windows-specific QoS handling
-
-## Repository layout
+## Repository Layout
 
 - [src/lib.rs](src/lib.rs)
-  VST3 processor, controller, factory, state, status formatting
+  VST3 processor, controller, factory, state, and host-facing status formatting
 - [src/network.rs](src/network.rs)
-  RTP transport, sender/receiver workers, buffering, decode/encode
+  RTP transport, sender/receiver workers, buffering, and encode/decode logic
 - [src/macos_gui.rs](src/macos_gui.rs)
   native macOS editor implementation
 - [src/params.rs](src/params.rs)
@@ -76,16 +71,22 @@ Not implemented yet:
 - [src/editor_api.rs](src/editor_api.rs)
   opaque bridge used by the macOS editor
 - [scripts/install_macos_vst3.sh](scripts/install_macos_vst3.sh)
-  macOS bundle build/install script
+  macOS bundle build and install script
+- [scripts/package_vst3.py](scripts/package_vst3.py)
+  cross-platform VST3 bundle packaging helper
+- [.github/workflows/ci.yml](.github/workflows/ci.yml)
+  matrix CI workflow for build, test, and lint checks
+- [.github/workflows/release.yml](.github/workflows/release.yml)
+  tag-driven packaging and GitHub release publishing workflow
 
-## Developer setup
+## Getting Started
 
 ### Prerequisites
 
-- macOS for the current bundle/install workflow
 - Rust toolchain via `rustup`
-- Xcode command line tools
+- `cargo`
 - `clang`
+- Xcode command line tools on macOS
 - a VST3 host for testing, typically REAPER and/or TouchDesigner
 
 Install Rust if needed:
@@ -102,11 +103,11 @@ rustc --version
 clang --version
 ```
 
-### Clone and build
+### Clone and Build
 
 ```bash
-git clone <private-repo-url>
-cd somethingnet
+git clone https://github.com/something-audio/somethingNET.git
+cd somethingNET
 cargo build
 ```
 
@@ -116,7 +117,7 @@ Release build:
 cargo build --release
 ```
 
-### Run tests
+### Test
 
 ```bash
 cargo test
@@ -128,7 +129,21 @@ Recommended local code-quality check:
 cargo clippy --all-targets --all-features -- -W clippy::all
 ```
 
-### Install the plugin on macOS
+## Continuous Integration
+
+GitHub Actions is set up to validate the project on:
+
+- macOS
+- Windows
+- Linux
+
+The CI workflow runs:
+
+- `cargo build --release`
+- `cargo test`
+- `cargo clippy --all-targets --all-features -- -W clippy::all`
+
+## Install on macOS
 
 User-level install:
 
@@ -142,19 +157,19 @@ System-level install:
 sudo scripts/install_macos_vst3.sh
 ```
 
-The installed bundle is:
+Installed bundle locations:
 
 - `~/Library/Audio/Plug-Ins/VST3/SomethingNet.vst3`
-- or `/Library/Audio/Plug-Ins/VST3/SomethingNet.vst3`
+- `/Library/Audio/Plug-Ins/VST3/SomethingNet.vst3`
 
 The installer:
 
 - builds the release artifact
 - links it into a macOS `.vst3` bundle
 - writes `Info.plist`
-- performs ad-hoc codesigning if possible
+- performs ad-hoc codesigning when available
 
-## Development workflow
+## Development Workflow
 
 Typical loop:
 
@@ -167,10 +182,10 @@ INSTALL_ROOT="$HOME/Library/Audio/Plug-Ins/VST3" scripts/install_macos_vst3.sh
 
 After reinstalling:
 
-- fully reload or rescan plugins in REAPER
+- reload or rescan plugins in REAPER
 - reload the TouchDesigner VST node if needed
 
-## Host setup notes
+## Host Setup Notes
 
 ### REAPER
 
@@ -185,9 +200,9 @@ After reinstalling:
 - if TouchDesigner shows `44,100 Hz`, resample before the VST if required
 - if using multichannel input, confirm the VST/audio bus layout matches the desired channel count
 
-## Basic usage
+## Usage
 
-### Unicast send -> receive
+### Unicast Send -> Receive
 
 Sender:
 
@@ -206,7 +221,7 @@ Receiver:
 - set matching `Port`
 - set matching `Channels`
 
-### Multicast publish -> subscribe
+### Multicast Publish -> Subscribe
 
 Sender:
 
@@ -222,9 +237,7 @@ Receiver:
 - endpoint IP = same multicast group address
 - set matching `Port`
 
-## Performance and debugging
-
-The plugin includes runtime status output and host-visible debug text in the macOS editor.
+## Performance and Debugging
 
 Useful things to watch:
 
@@ -239,13 +252,41 @@ Network capture:
 - use `udp.port == <port>` in Wireshark
 - this transport is UDP/RTP, not TCP
 
-## Important limitations
+Runtime monitor:
 
-- This is still an internal/private project, not a polished public product
+- the temp-file runtime monitor is disabled by default
+- enable it by launching the host with `SOMETHINGNET_DEBUG_RUNTIME=1`
+
+## Releases
+
+Tagging a version like `v0.1.0` triggers the release workflow.
+
+That workflow:
+
+- builds the plugin on macOS, Windows, and Linux
+- packages platform-specific `.vst3` bundles
+- zips the bundles for distribution
+- uploads the archives to the matching GitHub release
+- publishes a `SHA256SUMS.txt` file alongside the release assets
+
+## Limitations
+
 - ST 2110-style alignment here is transport-focused, not a full broadcast stack
 - `44.1 kHz` support is intentionally non-standard
 - macOS is the primary supported development target right now
+- the current custom GUI is macOS-only
 
-## Private repo note
+## Roadmap
 
-This repository is intended to stay private. It contains internal product code and evolving transport decisions that are not being maintained as a public SDK or open-source package.
+- stabilize cross-platform VST3 packaging and CI release builds
+- broaden host interoperability testing
+- add optional clocking/control-plane integrations where they materially improve interoperability
+- keep the transport fast, simple, and unobtrusive in real-world creative workflows
+
+## Contributing
+
+Issues and pull requests are welcome. If you are working on transport behavior, host compatibility, or cross-platform packaging, include exact host versions, sample rates, channel counts, and reproduction steps where possible.
+
+## License
+
+SomethingNet is released under the [MIT License](LICENSE).

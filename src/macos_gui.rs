@@ -35,7 +35,7 @@ use crate::{
 };
 
 const VIEW_WIDTH: f64 = 500.0;
-const VIEW_HEIGHT: f64 = 428.0;
+const VIEW_HEIGHT: f64 = 452.0;
 const LOGOTEXT_PNG: &[u8] = include_bytes!("../assets/logotext.png");
 
 struct EditorUi {
@@ -385,50 +385,50 @@ fn build_editor_ui(controller: EditorControllerApi, mtm: MainThreadMarker) -> Ed
         configure_root_layer(&layer);
     }
 
-    let title = label("SOMETHINGNET", 24.0, 384.0, 240.0, 24.0, mtm);
-    let brand_logo = branding_logo(24.0, 348.0, 118.0, 62.0, mtm);
-    let mode_badge = secondary_label("SEND", 268.0, 385.0, 88.0, 20.0, mtm);
-    let top_rule = separator(24.0, 368.0, 452.0, mtm);
+    let title = label("SOMETHINGNET", 24.0, 394.0, 240.0, 24.0, mtm);
+    let brand_logo = branding_logo(24.0, 364.0, 104.0, 55.0, mtm);
+    let mode_badge = secondary_label("", 0.0, 0.0, 1.0, 1.0, mtm);
+    let top_rule = separator(0.0, 0.0, 0.0, mtm);
 
-    let enabled = latch_toggle_button("Enabled", 364.0, 376.0, 112.0, 30.0, mtm);
+    let enabled = latch_toggle_button("ARM", 364.0, 386.0, 112.0, 30.0, mtm);
 
-    let mode_label = label("Mode", 160.0, 332.0, 48.0, 18.0, mtm);
+    let mode_label = label("Mode", 24.0, 318.0, 48.0, 18.0, mtm);
     let mode = NSSegmentedControl::new(mtm);
-    set_frame(&mode, 214.0, 326.0, 176.0, 28.0);
+    set_frame(&mode, 76.0, 312.0, 140.0, 28.0);
     mode.setSegmentCount(2);
     mode.setLabel_forSegment(ns_string!("Send"), 0);
     mode.setLabel_forSegment(ns_string!("Receive"), 1);
 
-    let transport_label = label("Transport", 24.0, 292.0, 84.0, 18.0, mtm);
+    let transport_label = label("Transport", 236.0, 318.0, 76.0, 18.0, mtm);
     let transport = NSSegmentedControl::new(mtm);
-    set_frame(&transport, 110.0, 286.0, 188.0, 28.0);
+    set_frame(&transport, 318.0, 312.0, 158.0, 28.0);
     transport.setSegmentCount(2);
     transport.setLabel_forSegment(ns_string!("Unicast"), 0);
     transport.setLabel_forSegment(ns_string!("Multicast"), 1);
 
-    let channels_label = label("Channels", 24.0, 248.0, 80.0, 18.0, mtm);
-    let channels = field("", 110.0, 242.0, 72.0, 24.0, mtm);
-    let port_label = label("Port", 214.0, 248.0, 40.0, 18.0, mtm);
-    let port = field("", 258.0, 242.0, 110.0, 24.0, mtm);
+    let channels_label = label("Channels", 24.0, 272.0, 80.0, 18.0, mtm);
+    let channels = field("", 110.0, 266.0, 72.0, 24.0, mtm);
+    let port_label = label("Port", 214.0, 272.0, 40.0, 18.0, mtm);
+    let port = field("", 258.0, 266.0, 110.0, 24.0, mtm);
 
-    let endpoint_label = label("Destination IP", 24.0, 204.0, 120.0, 18.0, mtm);
-    let endpoint_hint = secondary_label("", 150.0, 204.0, 320.0, 18.0, mtm);
-    let ip1 = field("", 24.0, 172.0, 70.0, 28.0, mtm);
-    let ip2 = field("", 102.0, 172.0, 70.0, 28.0, mtm);
-    let ip3 = field("", 180.0, 172.0, 70.0, 28.0, mtm);
-    let ip4 = field("", 258.0, 172.0, 70.0, 28.0, mtm);
+    let endpoint_label = label("Destination IP", 24.0, 226.0, 120.0, 18.0, mtm);
+    let endpoint_hint = secondary_label("", 150.0, 226.0, 320.0, 18.0, mtm);
+    let ip1 = field("", 24.0, 194.0, 70.0, 28.0, mtm);
+    let ip2 = field("", 102.0, 194.0, 70.0, 28.0, mtm);
+    let ip3 = field("", 180.0, 194.0, 70.0, 28.0, mtm);
+    let ip4 = field("", 258.0, 194.0, 70.0, 28.0, mtm);
 
     let apply =
         unsafe { NSButton::buttonWithTitle_target_action(ns_string!("Apply"), None, None, mtm) };
-    set_frame(&apply, 386.0, 170.0, 90.0, 32.0);
+    set_frame(&apply, 386.0, 192.0, 90.0, 32.0);
 
-    let bottom_rule = separator(24.0, 144.0, 452.0, mtm);
-    let debug_title = label("Runtime", 24.0, 120.0, 120.0, 18.0, mtm);
-    let runtime_panel = panel_box(24.0, 22.0, 452.0, 90.0, mtm);
-    let status_1 = readout_label("", 40.0, 88.0, 420.0, 18.0, mtm);
-    let status_2 = readout_label("", 40.0, 66.0, 420.0, 18.0, mtm);
+    let bottom_rule = separator(24.0, 158.0, 452.0, mtm);
+    let debug_title = label("Runtime", 24.0, 130.0, 120.0, 18.0, mtm);
+    let runtime_panel = panel_box(24.0, 18.0, 452.0, 106.0, mtm);
+    let status_1 = readout_label("", 40.0, 96.0, 420.0, 18.0, mtm);
+    let status_2 = readout_label("", 40.0, 70.0, 420.0, 18.0, mtm);
     let status_3 = readout_label("", 40.0, 44.0, 420.0, 18.0, mtm);
-    let status_4 = readout_label("", 40.0, 22.0, 420.0, 18.0, mtm);
+    let status_4 = readout_label("", 40.0, 18.0, 420.0, 18.0, mtm);
 
     let target = EditorTarget::new(
         controller,
@@ -486,8 +486,6 @@ fn build_editor_ui(controller: EditorControllerApi, mtm: MainThreadMarker) -> Ed
     } else {
         root.addSubview(&title);
     }
-    root.addSubview(&mode_badge);
-    root.addSubview(&top_rule);
     root.addSubview(&enabled);
     root.addSubview(&mode_label);
     root.addSubview(&mode);

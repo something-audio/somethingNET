@@ -445,7 +445,7 @@ impl Class for StreamProcessor {
 }
 
 impl StreamProcessor {
-    const CID: TUID = uid(0x6ACD6E1A, 0x4D0A4E20, 0xB3B29E42, 0x6F2F1791);
+    const CID: TUID = uid(0x5B8C1E44, 0x9E2043A1, 0xA0D447C5, 0x2A7F91B3);
 
     fn new() -> Self {
         let defaults = default_stream_parameters();
@@ -844,7 +844,7 @@ impl Class for StreamController {
 }
 
 impl StreamController {
-    const CID: TUID = uid(0x1B2D9E75, 0xABEF4BFC, 0x9B9D1A84, 0xB59F4092);
+    const CID: TUID = uid(0x8D4E21C3, 0x3F7B4D92, 0xB9A15E60, 0x1C2F88DA);
 
     fn new() -> Self {
         let defaults = default_stream_parameters();
