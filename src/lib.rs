@@ -4,6 +4,10 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 
 mod editor_api;
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+mod generic_gui;
+#[cfg(target_os = "linux")]
+mod linux_gui;
 mod network;
 mod params;
 
@@ -31,11 +35,12 @@ use params::{
 };
 use vst3::{Class, ComPtr, ComRef, ComWrapper, Steinberg::Vst::*, Steinberg::*, uid};
 
-#[cfg(target_os = "macos")]
 use crate::editor_api::EditorControllerApi;
 
 #[cfg(target_os = "macos")]
 mod macos_gui;
+#[cfg(target_os = "windows")]
+mod windows_gui;
 
 const PLUGIN_NAME: &str = "SomethingNet";
 const VENDOR_NAME: &str = "Something Audio";
@@ -1301,12 +1306,10 @@ impl StreamController {
     }
 }
 
-#[cfg(target_os = "macos")]
 unsafe fn editor_controller_parameters(controller: *const c_void) -> StreamParameters {
     (&*(controller as *const StreamController)).parameters()
 }
 
-#[cfg(target_os = "macos")]
 unsafe fn editor_controller_apply_ui_parameter(
     controller: *const c_void,
     id: u32,
@@ -1315,17 +1318,14 @@ unsafe fn editor_controller_apply_ui_parameter(
     (&*(controller as *const StreamController)).apply_ui_parameter(id, normalized);
 }
 
-#[cfg(target_os = "macos")]
 unsafe fn editor_controller_trigger_apply_reset(controller: *const c_void) {
     (&*(controller as *const StreamController)).trigger_apply_reset();
 }
 
-#[cfg(target_os = "macos")]
 unsafe fn editor_controller_runtime_status_lines(controller: *const c_void) -> [String; 4] {
     (&*(controller as *const StreamController)).runtime_status_lines()
 }
 
-#[cfg(target_os = "macos")]
 fn editor_controller_api(controller: *const StreamController) -> EditorControllerApi {
     EditorControllerApi {
         controller: controller.cast(),
@@ -1524,6 +1524,16 @@ impl IEditControllerTrait for StreamController {
         #[cfg(target_os = "macos")]
         {
             return macos_gui::create_editor_view(editor_controller_api(self as *const Self));
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            return windows_gui::create_editor_view(editor_controller_api(self as *const Self));
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            return linux_gui::create_editor_view(editor_controller_api(self as *const Self));
         }
 
         #[allow(unreachable_code)]

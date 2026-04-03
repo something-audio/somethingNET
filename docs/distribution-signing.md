@@ -8,6 +8,20 @@ SomethingNet now has release-workflow hooks for:
 
 The repository can automate these steps once you provide the appropriate credentials.
 
+## GitHub Setup
+
+Add the signing material as repository secrets under:
+
+- `Settings > Secrets and variables > Actions`
+
+The release workflow reads those secrets directly. Once they are present, tagged releases on GitHub Actions can produce signed artifacts automatically.
+
+Recommended repository settings:
+
+- keep release builds on protected tags
+- restrict who can create release tags
+- use GitHub Environments if you want approvals before signed publishes
+
 ## macOS
 
 Implemented:
@@ -44,6 +58,18 @@ Recommended setup:
 
 - use a `Developer ID Application` certificate
 - use `notarytool` with either a stored keychain profile or an app-specific password
+
+Practical checklist:
+
+- create or renew a `Developer ID Application` certificate in Apple Developer
+- export it from Keychain Access as `.p12`
+- base64-encode the `.p12` and store it in `APPLE_SIGNING_CERTIFICATE_P12_BASE64`
+- store the export password in `APPLE_SIGNING_CERTIFICATE_PASSWORD`
+- copy the exact identity string from `codesign -dv` or Keychain Access into `APPLE_CODESIGN_IDENTITY`
+- add your Apple team identifier as `APPLE_TEAM_ID`
+- choose one notarization path:
+  - preferred: create a `notarytool` keychain profile and store its name in `APPLE_NOTARY_KEYCHAIN_PROFILE`
+  - fallback: create an Apple app-specific password and store `APPLE_NOTARY_APPLE_ID` and `APPLE_NOTARY_PASSWORD`
 
 Official references:
 
@@ -84,6 +110,18 @@ Official references:
 - [Microsoft SignTool](https://learn.microsoft.com/en-us/windows/win32/seccrypto/signtool)
 - [Azure Trusted Signing integrations](https://learn.microsoft.com/en-us/azure/trusted-signing/how-to-signing-integrations)
 
+Practical checklist:
+
+- if using Azure Trusted Signing:
+  - create the Trusted Signing account and certificate profile in Azure
+  - create a service principal with access to that signing profile
+  - add the Azure tenant/client credentials and Trusted Signing identifiers as GitHub secrets
+- if using a `.p12` certificate instead:
+  - export the certificate as `.p12`
+  - base64-encode it into `WINDOWS_SIGN_CERTIFICATE_P12_BASE64`
+  - store the password in `WINDOWS_SIGN_CERTIFICATE_PASSWORD`
+  - set `WINDOWS_SIGN_TIMESTAMP_URL` to your preferred RFC 3161 timestamp server
+
 ## Linux
 
 There is no broadly enforced “code signing for VST3 bundles” equivalent to macOS Gatekeeper or Windows Authenticode.
@@ -102,6 +140,13 @@ Supported secrets:
 
 - `RELEASE_GPG_PRIVATE_KEY_BASE64`
 - `RELEASE_GPG_PASSPHRASE`
+
+Practical checklist:
+
+- create or reuse a dedicated release-signing GPG key
+- export the private key in ASCII armor, then base64-encode it into `RELEASE_GPG_PRIVATE_KEY_BASE64`
+- store the key passphrase in `RELEASE_GPG_PASSPHRASE`
+- publish the public key fingerprint in the project release notes or docs so users can verify signatures
 
 ## What This Does Not Solve
 
