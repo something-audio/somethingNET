@@ -42,6 +42,7 @@ const VENDOR_EMAIL: &str = "";
 const PLUGIN_VERSION: &str = "0.1.0";
 const PLUGIN_SUBCATEGORIES: &str = "Fx";
 const SDK_VERSION: &str = "VST 3";
+const DEBUG_RUNTIME_ENV: &str = "SOMETHINGNET_DEBUG_RUNTIME";
 
 fn copy_wstring(src: &str, dst: &mut [TChar]) {
     let mut len = 0;
@@ -90,6 +91,20 @@ fn runtime_status_path(params: StreamParameters) -> std::path::PathBuf {
     ))
 }
 
+fn parse_runtime_status_flag(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn runtime_status_enabled() -> bool {
+    std::env::var(DEBUG_RUNTIME_ENV)
+        .ok()
+        .map(|value| parse_runtime_status_flag(&value))
+        .unwrap_or(false)
+}
+
 #[derive(Clone, Copy)]
 struct RuntimeStatusSnapshot {
     params: StreamParameters,
@@ -99,13 +114,21 @@ struct RuntimeStatusSnapshot {
 }
 
 struct StatusWriter {
-    tx: SyncSender<RuntimeStatusSnapshot>,
+    tx: Option<SyncSender<RuntimeStatusSnapshot>>,
     shutdown: std::sync::Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
 }
 
 impl StatusWriter {
     fn new() -> Self {
+        if !runtime_status_enabled() {
+            return Self {
+                tx: None,
+                shutdown: std::sync::Arc::new(AtomicBool::new(false)),
+                join: None,
+            };
+        }
+
         let (tx, rx) = sync_channel::<RuntimeStatusSnapshot>(32);
         let shutdown = std::sync::Arc::new(AtomicBool::new(false));
         let thread_shutdown = shutdown.clone();
@@ -139,14 +162,18 @@ impl StatusWriter {
         });
 
         Self {
-            tx,
+            tx: Some(tx),
             shutdown,
             join: Some(join),
         }
     }
 
     fn try_send(&self, snapshot: RuntimeStatusSnapshot) {
-        match self.tx.try_send(snapshot) {
+        let Some(tx) = &self.tx else {
+            return;
+        };
+
+        match tx.try_send(snapshot) {
             Ok(()) => {}
             Err(TrySendError::Full(_)) => {}
             Err(TrySendError::Disconnected(_)) => {}
@@ -912,6 +939,37 @@ impl StreamController {
 
     pub(crate) fn runtime_status_lines(&self) -> [String; 4] {
         let params = self.parameters();
+        if !runtime_status_enabled() {
+            return [
+                "Runtime monitor is off by default.".to_string(),
+                format!(
+                    "Set {}=1 before launching the host to enable live counters.",
+                    DEBUG_RUNTIME_ENV
+                ),
+                format!(
+                    "Mode={} Transport={} Ch={} Port={}",
+                    match params.mode {
+                        StreamMode::Send => "Send",
+                        StreamMode::Receive => "Receive",
+                    },
+                    match params.transport {
+                        StreamTransport::Unicast => "Unicast",
+                        StreamTransport::Multicast => "Multicast",
+                    },
+                    params.channels,
+                    params.port
+                ),
+                format!(
+                    "{}={}.{}.{}.{}",
+                    params.endpoint_label(),
+                    params.ip[0],
+                    params.ip[1],
+                    params.ip[2],
+                    params.ip[3]
+                ),
+            ];
+        }
+
         let path = runtime_status_path(params);
         let Ok(content) = fs::read_to_string(path) else {
             return [
@@ -1555,6 +1613,15 @@ extern "system" fn GetPluginFactory() -> *mut IPluginFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_status_flag_parser_accepts_truthy_values() {
+        assert!(parse_runtime_status_flag("1"));
+        assert!(parse_runtime_status_flag("true"));
+        assert!(parse_runtime_status_flag(" On "));
+        assert!(!parse_runtime_status_flag("0"));
+        assert!(!parse_runtime_status_flag("debug"));
+    }
 
     #[test]
     fn apply_reset_token_clears_sender_state() {
