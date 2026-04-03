@@ -79,56 +79,6 @@ The sender also writes an SDP file to the system temp directory:
 - [.github/workflows/release.yml](.github/workflows/release.yml)
   tag-driven packaging and GitHub release publishing workflow
 
-## Getting Started
-
-### Prerequisites
-
-- Rust toolchain via `rustup`
-- `cargo`
-- `clang`
-- Xcode command line tools on macOS
-- a VST3 host for testing, typically REAPER and/or TouchDesigner
-
-Install Rust if needed:
-
-```bash
-curl https://sh.rustup.rs -sSf | sh
-```
-
-Confirm the basic toolchain:
-
-```bash
-cargo --version
-rustc --version
-clang --version
-```
-
-### Clone and Build
-
-```bash
-git clone https://github.com/something-audio/somethingNET.git
-cd somethingNET
-cargo build
-```
-
-Release build:
-
-```bash
-cargo build --release
-```
-
-### Test
-
-```bash
-cargo test
-```
-
-Recommended local code-quality check:
-
-```bash
-cargo clippy --all-targets --all-features -- -W clippy::all
-```
-
 ## Continuous Integration
 
 GitHub Actions is set up to validate the project on:
@@ -143,7 +93,11 @@ The CI workflow runs:
 - `cargo test`
 - `cargo clippy --all-targets --all-features -- -W clippy::all`
 
-## Install on macOS
+## Installation
+
+Prebuilt release bundles are attached to tagged GitHub releases. For local installs from source, platform scripts are provided in [scripts](scripts).
+
+### macOS
 
 User-level install:
 
@@ -157,33 +111,55 @@ System-level install:
 sudo scripts/install_macos_vst3.sh
 ```
 
-Installed bundle locations:
+Typical VST3 locations:
 
 - `~/Library/Audio/Plug-Ins/VST3/SomethingNet.vst3`
 - `/Library/Audio/Plug-Ins/VST3/SomethingNet.vst3`
 
-The installer:
+### Linux
 
-- builds the release artifact
-- links it into a macOS `.vst3` bundle
-- writes `Info.plist`
-- performs ad-hoc codesigning when available
-
-## Development Workflow
-
-Typical loop:
+User-level install:
 
 ```bash
-cargo fmt
-cargo clippy --all-targets --all-features -- -W clippy::all
-cargo test
-INSTALL_ROOT="$HOME/Library/Audio/Plug-Ins/VST3" scripts/install_macos_vst3.sh
+INSTALL_ROOT="$HOME/.vst3" scripts/install_linux_vst3.sh
 ```
 
-After reinstalling:
+System-level install:
 
-- reload or rescan plugins in REAPER
-- reload the TouchDesigner VST node if needed
+```bash
+sudo INSTALL_ROOT="/usr/lib/vst3" scripts/install_linux_vst3.sh
+```
+
+Typical VST3 locations:
+
+- `~/.vst3/SomethingNet.vst3`
+- `/usr/lib/vst3/SomethingNet.vst3`
+
+### Windows
+
+From PowerShell:
+
+```powershell
+.\scripts\install_windows_vst3.ps1
+```
+
+To override the destination:
+
+```powershell
+$env:INSTALL_ROOT = "$env:LOCALAPPDATA\Programs\Common\VST3"
+.\scripts\install_windows_vst3.ps1
+```
+
+Typical VST3 locations:
+
+- `%COMMONPROGRAMFILES%\VST3\SomethingNet.vst3`
+- `%LOCALAPPDATA%\Programs\Common\VST3\SomethingNet.vst3`
+
+All three installers:
+
+- build the release artifact
+- package the platform-specific `.vst3` bundle
+- install it into the selected VST3 directory
 
 ## Host Setup Notes
 
@@ -285,7 +261,7 @@ That workflow:
 
 ## Contributing
 
-Issues and pull requests are welcome. If you are working on transport behavior, host compatibility, or cross-platform packaging, include exact host versions, sample rates, channel counts, and reproduction steps where possible.
+Issues and pull requests are welcome. Development setup, local build/test commands, packaging notes, and release workflow details are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
