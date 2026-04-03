@@ -300,24 +300,24 @@ fn set_socket_option_int(socket: &UdpSocket, level: libc::c_int, name: libc::c_i
     };
 }
 
-fn configure_socket_priority(socket: &UdpSocket) {
+fn configure_socket_priority(_socket: &UdpSocket) {
     #[cfg(unix)]
     {
         set_socket_option_int(
-            socket,
+            _socket,
             libc::SOL_SOCKET,
             libc::SO_SNDBUF,
             SOCKET_BUFFER_BYTES,
         );
         set_socket_option_int(
-            socket,
+            _socket,
             libc::SOL_SOCKET,
             libc::SO_RCVBUF,
             SOCKET_BUFFER_BYTES,
         );
 
         set_socket_option_int(
-            socket,
+            _socket,
             libc::IPPROTO_IP,
             libc::IP_TOS,
             DSCP_EXPEDITED_FORWARDING,
@@ -325,7 +325,7 @@ fn configure_socket_priority(socket: &UdpSocket) {
 
         #[cfg(any(target_os = "linux", target_os = "android"))]
         set_socket_option_int(
-            socket,
+            _socket,
             libc::SOL_SOCKET,
             libc::SO_PRIORITY,
             SOCKET_PRIORITY_AUDIO,

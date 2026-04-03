@@ -30,6 +30,7 @@ use params::{
 };
 use vst3::{Class, ComPtr, ComRef, ComWrapper, Steinberg::Vst::*, Steinberg::*, uid};
 
+#[cfg(target_os = "macos")]
 use crate::editor_api::EditorControllerApi;
 
 #[cfg(target_os = "macos")]
@@ -103,6 +104,16 @@ fn runtime_status_enabled() -> bool {
         .ok()
         .map(|value| parse_runtime_status_flag(&value))
         .unwrap_or(false)
+}
+
+#[cfg(target_os = "windows")]
+fn default_bus_flags() -> u32 {
+    BusInfo_::BusFlags_::kDefaultActive as u32
+}
+
+#[cfg(not(target_os = "windows"))]
+fn default_bus_flags() -> u32 {
+    BusInfo_::BusFlags_::kDefaultActive
 }
 
 #[derive(Clone, Copy)]
@@ -628,7 +639,7 @@ impl IComponentTrait for StreamProcessor {
             &mut bus.name,
         );
         bus.busType = BusTypes_::kMain as BusType;
-        bus.flags = BusInfo_::BusFlags_::kDefaultActive;
+        bus.flags = default_bus_flags();
 
         kResultOk
     }
