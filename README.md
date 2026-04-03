@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/somethingaudio-logo.png" alt="Something Audio logo" width="720">
+  <img src="assets/somethingNET-logo.png" alt="SomethingNet logo" width="720">
 </p>
 
 # SomethingNet

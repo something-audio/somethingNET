@@ -7,12 +7,15 @@ use std::ffi::c_void;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol};
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
+use objc2::{
+    AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel,
+};
 use objc2_app_kit::{
     NSAutoresizingMaskOptions, NSBezelStyle, NSButton, NSButtonType, NSColor,
-    NSControlStateValueOff, NSControlStateValueOn, NSSegmentedControl, NSTextField, NSView,
+    NSControlStateValueOff, NSControlStateValueOn, NSImage, NSImageView, NSSegmentedControl,
+    NSTextField, NSView,
 };
-use objc2_foundation::{NSPoint, NSSize, NSString, NSTimer, ns_string};
+use objc2_foundation::{NSData, NSPoint, NSSize, NSString, NSTimer, ns_string};
 use objc2_quartz_core::CALayer;
 use vst3::{
     Class, ComWrapper,
@@ -33,6 +36,7 @@ use crate::{
 
 const VIEW_WIDTH: f64 = 500.0;
 const VIEW_HEIGHT: f64 = 428.0;
+const LOGOTEXT_PNG: &[u8] = include_bytes!("../assets/logotext.png");
 
 struct EditorUi {
     root: Retained<NSView>,
@@ -382,6 +386,7 @@ fn build_editor_ui(controller: EditorControllerApi, mtm: MainThreadMarker) -> Ed
     }
 
     let title = label("SOMETHINGNET", 24.0, 384.0, 240.0, 24.0, mtm);
+    let brand_logo = branding_logo(24.0, 348.0, 118.0, 62.0, mtm);
     let mode_badge = secondary_label("SEND", 268.0, 385.0, 88.0, 20.0, mtm);
     let top_rule = separator(24.0, 368.0, 452.0, mtm);
 
@@ -476,7 +481,11 @@ fn build_editor_ui(controller: EditorControllerApi, mtm: MainThreadMarker) -> Ed
         )
     };
 
-    root.addSubview(&title);
+    if let Some(brand_logo) = brand_logo.as_ref() {
+        root.addSubview(brand_logo);
+    } else {
+        root.addSubview(&title);
+    }
     root.addSubview(&mode_badge);
     root.addSubview(&top_rule);
     root.addSubview(&enabled);
@@ -672,6 +681,21 @@ fn latch_toggle_button(
     button.setBezelStyle(NSBezelStyle::Push);
     set_frame(&button, x, y, width, height);
     button
+}
+
+fn branding_logo(
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    mtm: MainThreadMarker,
+) -> Option<Retained<NSImageView>> {
+    let data =
+        unsafe { NSData::dataWithBytes_length(LOGOTEXT_PNG.as_ptr().cast(), LOGOTEXT_PNG.len()) };
+    let image = NSImage::initWithData(NSImage::alloc(), &data)?;
+    let image_view = NSImageView::imageViewWithImage(&image, mtm);
+    set_frame(&image_view, x, y, width, height);
+    Some(image_view)
 }
 
 fn set_frame(view: &NSView, x: f64, y: f64, width: f64, height: f64) {
