@@ -24,6 +24,7 @@ const MAX_PACKET_SAMPLES: usize = 441 * MAX_CHANNELS;
 const SDP_FILE_NAME: &str = "somethingnet.sdp";
 const STARTUP_BUFFER_PACKETS: usize = 4;
 const MAX_BUFFER_PACKETS: usize = 128;
+const MAX_BUFFER_SAMPLES: usize = MAX_BUFFER_PACKETS * MAX_PACKET_SAMPLES;
 const TARGET_CALLBACKS: usize = 2;
 const TARGET_SAFETY_PACKETS: usize = 3;
 const DRIFT_THRESHOLD_PACKETS: usize = 1;
@@ -1016,8 +1017,9 @@ impl ReceiverControlState {
 struct ReceiverAudioState {
     stream: Option<ActiveStream>,
     worker_rx: Option<Receiver<ReceiverPacket>>,
-    packet_queue: VecDeque<ReceiverPacket>,
-    front_packet_offset: usize,
+    sample_buffer: Vec<f32>,
+    read_index: usize,
+    write_index: usize,
     queued_samples: usize,
     last_frame: [f32; MAX_CHANNELS],
     primed: bool,
@@ -1037,8 +1039,9 @@ impl ReceiverAudioState {
         Self {
             stream: None,
             worker_rx: None,
-            packet_queue: VecDeque::with_capacity(MAX_BUFFER_PACKETS),
-            front_packet_offset: 0,
+            sample_buffer: vec![0.0; MAX_BUFFER_SAMPLES],
+            read_index: 0,
+            write_index: 0,
             queued_samples: 0,
             last_frame: [0.0; MAX_CHANNELS],
             primed: false,
@@ -1057,8 +1060,8 @@ impl ReceiverAudioState {
     fn reset_local(&mut self) {
         self.stream = None;
         self.worker_rx = None;
-        self.packet_queue.clear();
-        self.front_packet_offset = 0;
+        self.read_index = 0;
+        self.write_index = 0;
         self.queued_samples = 0;
         self.last_frame.fill(0.0);
         self.primed = false;
@@ -1124,8 +1127,19 @@ impl ReceiverAudioState {
     }
 
     fn enqueue_packet(&mut self, packet: ReceiverPacket) {
+        let overflow = self
+            .queued_samples
+            .saturating_add(packet.sample_count)
+            .saturating_sub(self.sample_buffer.len());
+        if overflow > 0 {
+            self.drop_oldest_samples(overflow);
+        }
+
+        for sample in packet.samples.iter().take(packet.sample_count) {
+            self.sample_buffer[self.write_index] = *sample;
+            self.write_index = (self.write_index + 1) % self.sample_buffer.len();
+        }
         self.queued_samples = self.queued_samples.saturating_add(packet.sample_count);
-        self.packet_queue.push_back(packet);
     }
 
     fn enqueue_concealment_packets(
@@ -1161,8 +1175,8 @@ impl ReceiverAudioState {
             return;
         }
 
-        self.packet_queue.clear();
-        self.front_packet_offset = 0;
+        self.read_index = 0;
+        self.write_index = 0;
         self.queued_samples = 0;
         self.last_frame.fill(0.0);
         self.primed = false;
@@ -1196,8 +1210,8 @@ impl ReceiverAudioState {
         channels: usize,
         frames: usize,
     ) {
-        self.packet_queue.clear();
-        self.front_packet_offset = 0;
+        self.read_index = 0;
+        self.write_index = 0;
         self.queued_samples = 0;
         self.last_frame.fill(0.0);
         self.primed = false;
@@ -1206,23 +1220,9 @@ impl ReceiverAudioState {
 
     fn trim_queue(&mut self, level: StreamLevel, channels: u8) {
         let max_samples = level.packet_frames() * channels as usize * MAX_BUFFER_PACKETS;
-        let mut overflow = self.queued_samples.saturating_sub(max_samples);
-        while overflow > 0 {
-            let Some(front) = self.packet_queue.front_mut() else {
-                self.front_packet_offset = 0;
-                self.queued_samples = 0;
-                break;
-            };
-            let available = front.sample_count.saturating_sub(self.front_packet_offset);
-            let to_drop = overflow.min(available);
-            self.front_packet_offset += to_drop;
-            self.queued_samples = self.queued_samples.saturating_sub(to_drop);
-            overflow -= to_drop;
-
-            if self.front_packet_offset >= front.sample_count {
-                self.packet_queue.pop_front();
-                self.front_packet_offset = 0;
-            }
+        let overflow = self.queued_samples.saturating_sub(max_samples);
+        if overflow > 0 {
+            self.drop_oldest_samples(overflow);
         }
     }
 
@@ -1322,24 +1322,20 @@ impl ReceiverAudioState {
     }
 
     fn pop_sample(&mut self) -> Option<f32> {
-        loop {
-            let front = self.packet_queue.front_mut()?;
-            if self.front_packet_offset < front.sample_count {
-                let sample = front.samples[self.front_packet_offset];
-                self.front_packet_offset += 1;
-                self.queued_samples = self.queued_samples.saturating_sub(1);
-
-                if self.front_packet_offset >= front.sample_count {
-                    self.packet_queue.pop_front();
-                    self.front_packet_offset = 0;
-                }
-
-                return Some(sample);
-            }
-
-            self.packet_queue.pop_front();
-            self.front_packet_offset = 0;
+        if self.queued_samples == 0 {
+            return None;
         }
+
+        let sample = self.sample_buffer[self.read_index];
+        self.read_index = (self.read_index + 1) % self.sample_buffer.len();
+        self.queued_samples = self.queued_samples.saturating_sub(1);
+        Some(sample)
+    }
+
+    fn drop_oldest_samples(&mut self, count: usize) {
+        let to_drop = count.min(self.queued_samples);
+        self.read_index = (self.read_index + to_drop) % self.sample_buffer.len();
+        self.queued_samples -= to_drop;
     }
 }
 
@@ -2059,10 +2055,9 @@ mod tests {
     #[test]
     fn clear_stalled_stream_flushes_buffer_and_mutes() {
         let mut state = ReceiverAudioState::new();
-        state.queued_samples = 128;
         state.primed = true;
         state.last_frame[0] = 0.5;
-        state.packet_queue.push_back(ReceiverPacket {
+        state.enqueue_packet(ReceiverPacket {
             sequence: 1,
             sample_count: 2,
             samples: [0.25; MAX_PACKET_SAMPLES],
