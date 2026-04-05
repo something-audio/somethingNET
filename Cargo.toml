@@ -1,6 +1,6 @@
 [package]
 name = "somethingnet_vst3"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "VST3 network audio sender/receiver plugin for RTP/L24 multichannel audio over IP"
 license = "MIT"
