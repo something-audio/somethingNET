@@ -27,15 +27,16 @@ use vst3::{
 
 use crate::{
     editor_api::EditorControllerApi,
-    network::{MAX_CHANNELS, StreamMode, StreamTransport},
+    network::{ClockReference, StreamMode, StreamTransport},
     params::{
-        PARAM_CHANNELS, PARAM_ENABLED, PARAM_IP_1, PARAM_IP_2, PARAM_IP_3, PARAM_IP_4, PARAM_MODE,
-        PARAM_PORT, PARAM_TRANSPORT, parameter_spec,
+        PARAM_CHANNELS, PARAM_CLOCK_REF, PARAM_ENABLED, PARAM_IP_1, PARAM_IP_2, PARAM_IP_3,
+        PARAM_IP_4, PARAM_MODE, PARAM_PORT, PARAM_PTP_DOMAIN, PARAM_TRANSPORT, VST3_MAX_CHANNELS,
+        parameter_spec,
     },
 };
 
 const VIEW_WIDTH: f64 = 500.0;
-const VIEW_HEIGHT: f64 = 452.0;
+const VIEW_HEIGHT: f64 = 492.0;
 const LOGOTEXT_PNG: &[u8] = include_bytes!("../assets/logotext.png");
 
 struct EditorUi {
@@ -175,6 +176,8 @@ struct EditorTargetIvars {
     enabled: Retained<NSButton>,
     mode: Retained<NSSegmentedControl>,
     transport: Retained<NSSegmentedControl>,
+    clock_reference: Retained<NSSegmentedControl>,
+    ptp_domain: Retained<NSTextField>,
     channels: Retained<NSTextField>,
     port: Retained<NSTextField>,
     mode_badge: Retained<NSTextField>,
@@ -191,6 +194,8 @@ struct EditorControls {
     enabled: Retained<NSButton>,
     mode: Retained<NSSegmentedControl>,
     transport: Retained<NSSegmentedControl>,
+    clock_reference: Retained<NSSegmentedControl>,
+    ptp_domain: Retained<NSTextField>,
     channels: Retained<NSTextField>,
     port: Retained<NSTextField>,
     mode_badge: Retained<NSTextField>,
@@ -242,6 +247,11 @@ define_class!(
             sync_transport_semantics(self);
         }
 
+        #[unsafe(method(clockChanged:))]
+        fn clock_changed(&self, _sender: Option<&AnyObject>) {
+            sync_clock_semantics(self);
+        }
+
         #[unsafe(method(applyPressed:))]
         fn apply_pressed(&self, _sender: Option<&AnyObject>) {
             let controller = self.ivars().controller;
@@ -286,9 +296,37 @@ define_class!(
             }
 
             let current = unsafe { (controller.parameters)(controller.controller) };
+            let clock_reference = if self.ivars().clock_reference.selectedSegment() == 1 {
+                1
+            } else {
+                0
+            };
+            unsafe {
+                (controller.apply_ui_parameter)(
+                    controller.controller,
+                    PARAM_CLOCK_REF,
+                    parameter_spec(PARAM_CLOCK_REF)
+                        .unwrap()
+                        .plain_to_normalized(clock_reference),
+                );
+            }
+
+            let ptp_domain = parse_field_u32(&self.ivars().ptp_domain)
+                .unwrap_or(current.ptp_domain as u32)
+                .clamp(0, 127);
+            unsafe {
+                (controller.apply_ui_parameter)(
+                    controller.controller,
+                    PARAM_PTP_DOMAIN,
+                    parameter_spec(PARAM_PTP_DOMAIN)
+                        .unwrap()
+                        .plain_to_normalized(ptp_domain),
+                );
+            }
+
             let channels = parse_field_u32(&self.ivars().channels)
                 .unwrap_or(current.channels as u32)
-                .clamp(1, MAX_CHANNELS as u32);
+                .clamp(1, VST3_MAX_CHANNELS as u32);
             unsafe {
                 (controller.apply_ui_parameter)(
                     controller.controller,
@@ -358,6 +396,8 @@ impl EditorTarget {
             enabled: controls.enabled,
             mode: controls.mode,
             transport: controls.transport,
+            clock_reference: controls.clock_reference,
+            ptp_domain: controls.ptp_domain,
             channels: controls.channels,
             port: controls.port,
             mode_badge: controls.mode_badge,
@@ -385,50 +425,60 @@ fn build_editor_ui(controller: EditorControllerApi, mtm: MainThreadMarker) -> Ed
         configure_root_layer(&layer);
     }
 
-    let title = label("SOMETHINGNET", 24.0, 394.0, 240.0, 24.0, mtm);
-    let brand_logo = branding_logo(24.0, 364.0, 104.0, 55.0, mtm);
+    let title = label("SomeNET", 24.0, 434.0, 240.0, 24.0, mtm);
+    let brand_logo = branding_logo(24.0, 404.0, 104.0, 55.0, mtm);
     let mode_badge = secondary_label("", 0.0, 0.0, 1.0, 1.0, mtm);
     let top_rule = separator(0.0, 0.0, 0.0, mtm);
 
-    let enabled = latch_toggle_button("ARM", 364.0, 386.0, 112.0, 30.0, mtm);
+    let enabled = latch_toggle_button("ARM", 364.0, 426.0, 112.0, 30.0, mtm);
 
-    let mode_label = label("Mode", 24.0, 318.0, 48.0, 18.0, mtm);
+    let mode_label = label("Mode", 24.0, 358.0, 48.0, 18.0, mtm);
     let mode = NSSegmentedControl::new(mtm);
-    set_frame(&mode, 76.0, 312.0, 140.0, 28.0);
+    set_frame(&mode, 76.0, 352.0, 140.0, 28.0);
     mode.setSegmentCount(2);
     mode.setLabel_forSegment(ns_string!("Send"), 0);
     mode.setLabel_forSegment(ns_string!("Receive"), 1);
 
-    let transport_label = label("Transport", 236.0, 318.0, 76.0, 18.0, mtm);
+    let transport_label = label("Transport", 236.0, 358.0, 76.0, 18.0, mtm);
     let transport = NSSegmentedControl::new(mtm);
-    set_frame(&transport, 318.0, 312.0, 158.0, 28.0);
+    set_frame(&transport, 318.0, 352.0, 158.0, 28.0);
     transport.setSegmentCount(2);
     transport.setLabel_forSegment(ns_string!("Unicast"), 0);
     transport.setLabel_forSegment(ns_string!("Multicast"), 1);
 
-    let channels_label = label("Channels", 24.0, 272.0, 80.0, 18.0, mtm);
-    let channels = field("", 110.0, 266.0, 72.0, 24.0, mtm);
-    let port_label = label("Port", 214.0, 272.0, 40.0, 18.0, mtm);
-    let port = field("", 258.0, 266.0, 110.0, 24.0, mtm);
+    let clock_label = label("Clock", 24.0, 312.0, 48.0, 18.0, mtm);
+    let clock_reference = NSSegmentedControl::new(mtm);
+    set_frame(&clock_reference, 76.0, 306.0, 140.0, 28.0);
+    clock_reference.setSegmentCount(2);
+    clock_reference.setLabel_forSegment(ns_string!("Local"), 0);
+    clock_reference.setLabel_forSegment(ns_string!("PTP"), 1);
 
-    let endpoint_label = label("Destination IP", 24.0, 226.0, 120.0, 18.0, mtm);
-    let endpoint_hint = secondary_label("", 150.0, 226.0, 320.0, 18.0, mtm);
-    let ip1 = field("", 24.0, 194.0, 70.0, 28.0, mtm);
-    let ip2 = field("", 102.0, 194.0, 70.0, 28.0, mtm);
-    let ip3 = field("", 180.0, 194.0, 70.0, 28.0, mtm);
-    let ip4 = field("", 258.0, 194.0, 70.0, 28.0, mtm);
+    let ptp_domain_label = label("PTP Domain", 236.0, 312.0, 88.0, 18.0, mtm);
+    let ptp_domain = field("", 334.0, 306.0, 72.0, 24.0, mtm);
+
+    let channels_label = label("Channels", 24.0, 266.0, 80.0, 18.0, mtm);
+    let channels = field("", 110.0, 260.0, 72.0, 24.0, mtm);
+    let port_label = label("Port", 214.0, 266.0, 40.0, 18.0, mtm);
+    let port = field("", 258.0, 260.0, 110.0, 24.0, mtm);
+
+    let endpoint_label = label("Destination IP", 24.0, 220.0, 120.0, 18.0, mtm);
+    let endpoint_hint = secondary_label("", 150.0, 220.0, 320.0, 18.0, mtm);
+    let ip1 = field("", 24.0, 188.0, 70.0, 28.0, mtm);
+    let ip2 = field("", 102.0, 188.0, 70.0, 28.0, mtm);
+    let ip3 = field("", 180.0, 188.0, 70.0, 28.0, mtm);
+    let ip4 = field("", 258.0, 188.0, 70.0, 28.0, mtm);
 
     let apply =
         unsafe { NSButton::buttonWithTitle_target_action(ns_string!("Apply"), None, None, mtm) };
-    set_frame(&apply, 386.0, 192.0, 90.0, 32.0);
+    set_frame(&apply, 386.0, 186.0, 90.0, 32.0);
 
-    let bottom_rule = separator(24.0, 158.0, 452.0, mtm);
-    let debug_title = label("Runtime", 24.0, 130.0, 120.0, 18.0, mtm);
-    let runtime_panel = panel_box(24.0, 18.0, 452.0, 106.0, mtm);
-    let status_1 = readout_label("", 40.0, 96.0, 420.0, 18.0, mtm);
-    let status_2 = readout_label("", 40.0, 70.0, 420.0, 18.0, mtm);
-    let status_3 = readout_label("", 40.0, 44.0, 420.0, 18.0, mtm);
-    let status_4 = readout_label("", 40.0, 18.0, 420.0, 18.0, mtm);
+    let bottom_rule = separator(24.0, 152.0, 452.0, mtm);
+    let debug_title = label("Runtime", 24.0, 124.0, 120.0, 18.0, mtm);
+    let runtime_panel = panel_box(24.0, 18.0, 452.0, 100.0, mtm);
+    let status_1 = readout_label("", 40.0, 88.0, 420.0, 18.0, mtm);
+    let status_2 = readout_label("", 40.0, 64.0, 420.0, 18.0, mtm);
+    let status_3 = readout_label("", 40.0, 40.0, 420.0, 18.0, mtm);
+    let status_4 = readout_label("", 40.0, 16.0, 420.0, 18.0, mtm);
 
     let target = EditorTarget::new(
         controller,
@@ -439,6 +489,8 @@ fn build_editor_ui(controller: EditorControllerApi, mtm: MainThreadMarker) -> Ed
             enabled: enabled.clone(),
             mode: mode.clone(),
             transport: transport.clone(),
+            clock_reference: clock_reference.clone(),
+            ptp_domain: ptp_domain.clone(),
             channels: channels.clone(),
             port: port.clone(),
             mode_badge: mode_badge.clone(),
@@ -463,6 +515,8 @@ fn build_editor_ui(controller: EditorControllerApi, mtm: MainThreadMarker) -> Ed
         mode.setAction(Some(sel!(modeChanged:)));
         transport.setTarget(Some(target_obj));
         transport.setAction(Some(sel!(transportChanged:)));
+        clock_reference.setTarget(Some(target_obj));
+        clock_reference.setAction(Some(sel!(clockChanged:)));
         apply.setTarget(Some(target_obj));
         apply.setAction(Some(sel!(applyPressed:)));
     }
@@ -491,6 +545,10 @@ fn build_editor_ui(controller: EditorControllerApi, mtm: MainThreadMarker) -> Ed
     root.addSubview(&mode);
     root.addSubview(&transport_label);
     root.addSubview(&transport);
+    root.addSubview(&clock_label);
+    root.addSubview(&clock_reference);
+    root.addSubview(&ptp_domain_label);
+    root.addSubview(&ptp_domain);
     root.addSubview(&channels_label);
     root.addSubview(&channels);
     root.addSubview(&port_label);
@@ -539,6 +597,17 @@ fn sync_controls_from_controller(target: &EditorTarget) {
         });
     target
         .ivars()
+        .clock_reference
+        .setSelectedSegment(match params.clock_reference {
+            ClockReference::Local => 0,
+            ClockReference::Ptp => 1,
+        });
+    target
+        .ivars()
+        .ptp_domain
+        .setStringValue(&NSString::from_str(&params.ptp_domain.to_string()));
+    target
+        .ivars()
         .channels
         .setStringValue(&NSString::from_str(&params.channels.to_string()));
     target
@@ -550,6 +619,7 @@ fn sync_controls_from_controller(target: &EditorTarget) {
     }
 
     sync_transport_semantics(target);
+    sync_clock_semantics(target);
 }
 
 fn sync_status_from_controller(target: &EditorTarget) {
@@ -598,6 +668,11 @@ fn sync_transport_semantics(target: &EditorTarget) {
         .setStringValue(&NSString::from_str(hint_text));
 
     sync_mode_appearance(target, mode);
+}
+
+fn sync_clock_semantics(target: &EditorTarget) {
+    let is_ptp = target.ivars().clock_reference.selectedSegment() == 1;
+    target.ivars().ptp_domain.setEnabled(is_ptp);
 }
 
 fn parse_field_u32(field: &NSTextField) -> Option<u32> {

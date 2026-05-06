@@ -16,9 +16,9 @@ except ModuleNotFoundError:  # pragma: no cover
     import tomli as tomllib
 
 
-PLUGIN_NAME = "SomethingNet"
-CRATE_NAME = "somethingnet_vst3"
-BUNDLE_ID = "com.somethingaudio.somethingnet"
+PLUGIN_NAME = "SomeNET"
+CRATE_NAME = "somenet_vst3"
+BUNDLE_ID = "com.somethingaudio.somenet"
 MIN_MACOS_VERSION = "11.0"
 
 
@@ -165,7 +165,7 @@ def create_archive(bundle_root: Path, archive_path: Path) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Package SomethingNet as a VST3 bundle.")
+    parser = argparse.ArgumentParser(description="Package SomeNET as a VST3 bundle.")
     parser.add_argument("--platform", choices=["macos", "windows", "linux"], required=True)
     parser.add_argument(
         "--target-dir",

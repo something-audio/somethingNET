@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PLUGIN_NAME="SomethingNet"
+PLUGIN_NAME="SomeNET"
 INSTALL_ROOT="${INSTALL_ROOT:-$HOME/.vst3}"
 PLUGIN_BUNDLE="${INSTALL_ROOT}/${PLUGIN_NAME}.vst3"
 
