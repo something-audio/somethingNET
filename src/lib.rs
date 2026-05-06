@@ -8,7 +8,7 @@ mod editor_api;
 mod generic_gui;
 #[cfg(target_os = "linux")]
 mod linux_gui;
-mod network;
+pub mod network;
 mod params;
 
 use std::cell::{Cell, RefCell};
@@ -31,7 +31,7 @@ use network::{
 use params::{
     PARAM_APPLY_SEQ, PARAM_CHANNELS, PARAM_CLOCK_REF, PARAM_COUNT, PARAM_ENABLED, PARAM_IP_1,
     PARAM_IP_2, PARAM_IP_3, PARAM_IP_4, PARAM_MODE, PARAM_PORT, PARAM_PTP_DOMAIN, PARAM_TRANSPORT,
-    copy_cstring, default_stream_parameters, parameter_spec,
+    VST3_MAX_CHANNELS, copy_cstring, default_stream_parameters, parameter_spec,
 };
 use vst3::{Class, ComPtr, ComRef, ComWrapper, Steinberg::Vst::*, Steinberg::*, uid};
 
@@ -42,14 +42,15 @@ mod macos_gui;
 #[cfg(target_os = "windows")]
 mod windows_gui;
 
-const PLUGIN_NAME: &str = "SomethingNet";
+const PLUGIN_NAME: &str = "SomeNET";
 const VENDOR_NAME: &str = "Something Audio";
 const VENDOR_URL: &str = "";
 const VENDOR_EMAIL: &str = "";
 const PLUGIN_VERSION: &str = "0.2.0";
 const PLUGIN_SUBCATEGORIES: &str = "Fx";
 const SDK_VERSION: &str = "VST 3";
-const DEBUG_RUNTIME_ENV: &str = "SOMETHINGNET_DEBUG_RUNTIME";
+const DEBUG_RUNTIME_ENV: &str = "SOMENET_DEBUG_RUNTIME";
+const MAX_SPEAKER_ARRANGEMENT_CHANNELS: u8 = VST3_MAX_CHANNELS as u8;
 
 fn copy_wstring(src: &str, dst: &mut [TChar]) {
     let mut len = 0;
@@ -66,6 +67,10 @@ fn copy_wstring(src: &str, dst: &mut [TChar]) {
 }
 
 unsafe fn len_wstring(string: *const TChar) -> usize {
+    if string.is_null() {
+        return 0;
+    }
+
     let mut len = 0;
     while *string.offset(len) != 0 {
         len += 1;
@@ -86,7 +91,7 @@ fn runtime_status_path(params: StreamParameters) -> std::path::PathBuf {
         StreamMode::Receive => "recv",
     };
     std::env::temp_dir().join(format!(
-        "somethingnet-status-{}-{}-{}-{}-{}-{}-{}-{}.txt",
+        "somenet-status-{}-{}-{}-{}-{}-{}-{}-{}.txt",
         std::process::id(),
         mode,
         params.port,
@@ -331,7 +336,7 @@ fn arrangement_channel_count(arrangement: SpeakerArrangement) -> i32 {
 }
 
 fn speaker_arrangement_for_channels(channels: u8) -> SpeakerArrangement {
-    match channels.clamp(1, MAX_CHANNELS as u8) {
+    match channels.clamp(1, VST3_MAX_CHANNELS as u8) {
         1 => SpeakerArr::kMono,
         2 => SpeakerArr::kStereo,
         3 => SpeakerArr::k30Music,
@@ -340,7 +345,26 @@ fn speaker_arrangement_for_channels(channels: u8) -> SpeakerArrangement {
         6 => SpeakerArr::k51,
         7 => SpeakerArr::k70Cine,
         8 => SpeakerArr::k71Cine,
-        n => ((1_u64 << n) - 1) as SpeakerArrangement,
+        n if n <= MAX_SPEAKER_ARRANGEMENT_CHANNELS => {
+            if n == MAX_SPEAKER_ARRANGEMENT_CHANNELS {
+                u64::MAX as SpeakerArrangement
+            } else {
+                ((1_u64 << n) - 1) as SpeakerArrangement
+            }
+        }
+        _ => SpeakerArr::kEmpty,
+    }
+}
+
+fn bus_channel_count_for_arrangement(
+    arrangement: SpeakerArrangement,
+    fallback_channels: u32,
+) -> u32 {
+    let arranged_channels = arrangement_channel_count(arrangement);
+    if arranged_channels > 0 {
+        arranged_channels.clamp(1, VST3_MAX_CHANNELS as i32) as u32
+    } else {
+        fallback_channels.clamp(1, VST3_MAX_CHANNELS as u32)
     }
 }
 
@@ -354,17 +378,11 @@ unsafe fn copy_input_to_output(
         return;
     };
 
-    let output_channels = slice::from_raw_parts_mut(
-        output_bus.__field0.channelBuffers32,
-        output_bus.numChannels as usize,
-    );
+    let Some(output_channels) = audio_channel_ptrs(output_bus) else {
+        return;
+    };
 
-    let input_channels = input_buses.first().map(|input_bus| {
-        slice::from_raw_parts(
-            input_bus.__field0.channelBuffers32,
-            input_bus.numChannels as usize,
-        )
-    });
+    let input_channels = input_buses.first().and_then(|bus| audio_channel_ptrs(bus));
 
     let copy_channels = input_channels
         .map(|channels| channels.len().min(output_channels.len()))
@@ -372,6 +390,9 @@ unsafe fn copy_input_to_output(
 
     if let Some(input_channels) = input_channels {
         for channel_index in 0..copy_channels {
+            if input_channels[channel_index].is_null() || output_channels[channel_index].is_null() {
+                continue;
+            }
             let src = slice::from_raw_parts(input_channels[channel_index], num_samples);
             let dst = slice::from_raw_parts_mut(output_channels[channel_index], num_samples);
             dst.copy_from_slice(src);
@@ -379,6 +400,9 @@ unsafe fn copy_input_to_output(
     }
 
     for output_channel in output_channels.iter().skip(copy_channels) {
+        if output_channel.is_null() {
+            continue;
+        }
         let dst = slice::from_raw_parts_mut(*output_channel, num_samples);
         dst.fill(0.0);
     }
@@ -396,13 +420,15 @@ unsafe fn fill_outputs_from_receiver(
         return;
     };
 
-    let output_channel_buffers = slice::from_raw_parts_mut(
-        output_bus.__field0.channelBuffers32,
-        output_bus.numChannels as usize,
-    );
+    let Some(output_channel_buffers) = audio_channel_ptrs(output_bus) else {
+        return;
+    };
     let mut output_channels = std::array::from_fn(|_| None);
 
     for channel_index in 0..output_channel_buffers.len().min(MAX_CHANNELS) {
+        if output_channel_buffers[channel_index].is_null() {
+            continue;
+        }
         output_channels[channel_index] = Some(slice::from_raw_parts_mut(
             output_channel_buffers[channel_index],
             num_samples,
@@ -429,12 +455,14 @@ unsafe fn collect_source_channels<'a>(
         return source_channels;
     };
 
-    let channel_buffers = slice::from_raw_parts(
-        source_bus.__field0.channelBuffers32,
-        source_bus.numChannels as usize,
-    );
+    let Some(channel_buffers) = audio_channel_ptrs(source_bus) else {
+        return source_channels;
+    };
 
     for channel_index in 0..channel_buffers.len().min(MAX_CHANNELS) {
+        if channel_buffers[channel_index].is_null() {
+            continue;
+        }
         source_channels[channel_index] = Some(slice::from_raw_parts(
             channel_buffers[channel_index],
             num_samples,
@@ -442,6 +470,35 @@ unsafe fn collect_source_channels<'a>(
     }
 
     source_channels
+}
+
+unsafe fn audio_buses(ptr: *mut AudioBusBuffers, count: i32) -> Option<&'static [AudioBusBuffers]> {
+    let count = count.max(0) as usize;
+    if count == 0 {
+        return Some(slice::from_raw_parts(
+            std::ptr::NonNull::dangling().as_ptr(),
+            0,
+        ));
+    }
+    if ptr.is_null() {
+        return None;
+    }
+    Some(slice::from_raw_parts(ptr, count))
+}
+
+unsafe fn audio_channel_ptrs(bus: &AudioBusBuffers) -> Option<&[*mut f32]> {
+    let channels = bus.numChannels.max(0) as usize;
+    if channels == 0 {
+        return Some(slice::from_raw_parts(
+            std::ptr::NonNull::dangling().as_ptr(),
+            0,
+        ));
+    }
+    let ptr = bus.__field0.channelBuffers32;
+    if ptr.is_null() {
+        return None;
+    }
+    Some(slice::from_raw_parts(ptr, channels))
 }
 
 struct StreamProcessor {
@@ -456,6 +513,8 @@ struct StreamProcessor {
     apply_seq: AtomicU32,
     input_arrangement: AtomicU64,
     output_arrangement: AtomicU64,
+    input_bus_channels: AtomicU32,
+    output_bus_channels: AtomicU32,
     sample_rate_hz: AtomicU32,
     last_status_write_ms: AtomicU64,
     status_writer: StatusWriter,
@@ -472,7 +531,7 @@ impl StreamProcessor {
 
     fn new() -> Self {
         let defaults = default_stream_parameters();
-        let default_arrangement = speaker_arrangement_for_channels(MAX_CHANNELS as u8);
+        let default_arrangement = speaker_arrangement_for_channels(VST3_MAX_CHANNELS as u8);
         Self {
             enabled: AtomicBool::new(defaults.enabled),
             mode: AtomicU32::new(defaults.mode.as_u8() as u32),
@@ -485,6 +544,8 @@ impl StreamProcessor {
             apply_seq: AtomicU32::new(0),
             input_arrangement: AtomicU64::new(default_arrangement),
             output_arrangement: AtomicU64::new(default_arrangement),
+            input_bus_channels: AtomicU32::new(VST3_MAX_CHANNELS as u32),
+            output_bus_channels: AtomicU32::new(VST3_MAX_CHANNELS as u32),
             sample_rate_hz: AtomicU32::new(48_000),
             last_status_write_ms: AtomicU64::new(0),
             status_writer: StatusWriter::new(),
@@ -503,7 +564,7 @@ impl StreamProcessor {
             channels: self
                 .channels
                 .load(Ordering::Relaxed)
-                .clamp(1, MAX_CHANNELS as u32) as u8,
+                .clamp(1, VST3_MAX_CHANNELS as u32) as u8,
             port: self.port.load(Ordering::Relaxed).clamp(1, u16::MAX as u32) as u16,
             ip: [
                 self.ip[0].load(Ordering::Relaxed).clamp(0, 255) as u8,
@@ -524,16 +585,22 @@ impl StreamProcessor {
             .store(state.clock_reference.as_u8() as u32, Ordering::Relaxed);
         self.ptp_domain
             .store(state.ptp_domain.min(127) as u32, Ordering::Relaxed);
-        self.channels
-            .store(state.channels as u32, Ordering::Relaxed);
-        let arrangement = speaker_arrangement_for_channels(state.channels);
+        let channels = state.channels.clamp(1, VST3_MAX_CHANNELS as u8);
+        self.channels.store(channels as u32, Ordering::Relaxed);
+        let arrangement = speaker_arrangement_for_channels(channels);
         self.input_arrangement.store(arrangement, Ordering::Relaxed);
         self.output_arrangement
             .store(arrangement, Ordering::Relaxed);
+        self.input_bus_channels
+            .store(channels as u32, Ordering::Relaxed);
+        self.output_bus_channels
+            .store(channels as u32, Ordering::Relaxed);
         self.port.store(state.port as u32, Ordering::Relaxed);
         for (atomic, value) in self.ip.iter().zip(state.ip) {
             atomic.store(value as u32, Ordering::Relaxed);
         }
+        self.sender.reset();
+        self.receiver.reset();
     }
 
     fn apply_parameter_change(&self, id: u32, value: f64) {
@@ -575,6 +642,8 @@ impl StreamProcessor {
                 self.input_arrangement.store(arrangement, Ordering::Relaxed);
                 self.output_arrangement
                     .store(arrangement, Ordering::Relaxed);
+                self.input_bus_channels.store(plain, Ordering::Relaxed);
+                self.output_bus_channels.store(plain, Ordering::Relaxed);
                 self.sender.reset();
                 self.receiver.reset();
             }
@@ -652,15 +721,16 @@ impl IComponentTrait for StreamProcessor {
         }
 
         let bus = &mut *bus;
-        let arrangement = match dir as BusDirections {
-            BusDirections_::kInput => self.input_arrangement.load(Ordering::Relaxed),
-            BusDirections_::kOutput => self.output_arrangement.load(Ordering::Relaxed),
+        let channel_count = match dir as BusDirections {
+            BusDirections_::kInput => self.input_bus_channels.load(Ordering::Relaxed),
+            BusDirections_::kOutput => self.output_bus_channels.load(Ordering::Relaxed),
             _ => return kInvalidArgument,
-        };
+        }
+        .clamp(1, VST3_MAX_CHANNELS as u32);
 
         bus.mediaType = MediaTypes_::kAudio as MediaType;
         bus.direction = dir;
-        bus.channelCount = arrangement_channel_count(arrangement);
+        bus.channelCount = channel_count as i32;
         copy_wstring(
             if dir as BusDirections == BusDirections_::kInput {
                 "Input"
@@ -728,13 +798,16 @@ impl IAudioProcessorTrait for StreamProcessor {
 
         let input_arrangement = *inputs;
         let output_arrangement = *outputs;
-        let input_channels = arrangement_channel_count(input_arrangement);
-        let output_channels = arrangement_channel_count(output_arrangement);
+        let fallback_channels = self.channels.load(Ordering::Relaxed);
+        let input_channels =
+            bus_channel_count_for_arrangement(input_arrangement, fallback_channels);
+        let output_channels =
+            bus_channel_count_for_arrangement(output_arrangement, fallback_channels);
 
         if input_channels < 1
             || output_channels < 1
-            || input_channels > MAX_CHANNELS as i32
-            || output_channels > MAX_CHANNELS as i32
+            || input_channels > VST3_MAX_CHANNELS as u32
+            || output_channels > VST3_MAX_CHANNELS as u32
             || input_channels != output_channels
         {
             return kResultFalse;
@@ -744,6 +817,10 @@ impl IAudioProcessorTrait for StreamProcessor {
             .store(input_arrangement, Ordering::Relaxed);
         self.output_arrangement
             .store(output_arrangement, Ordering::Relaxed);
+        self.input_bus_channels
+            .store(input_channels, Ordering::Relaxed);
+        self.output_bus_channels
+            .store(output_channels, Ordering::Relaxed);
 
         kResultTrue
     }
@@ -784,6 +861,9 @@ impl IAudioProcessorTrait for StreamProcessor {
     }
 
     unsafe fn setupProcessing(&self, setup: *mut ProcessSetup) -> tresult {
+        if setup.is_null() {
+            return kInvalidArgument;
+        }
         let setup = &*setup;
         self.sample_rate_hz
             .store(setup.sampleRate.round() as u32, Ordering::Relaxed);
@@ -799,6 +879,9 @@ impl IAudioProcessorTrait for StreamProcessor {
     }
 
     unsafe fn process(&self, data: *mut ProcessData) -> tresult {
+        if data.is_null() {
+            return kInvalidArgument;
+        }
         let process_data = &*data;
 
         if let Some(param_changes) = ComRef::from_raw(process_data.inputParameterChanges) {
@@ -825,16 +908,17 @@ impl IAudioProcessorTrait for StreamProcessor {
         }
 
         let num_samples = process_data.numSamples as usize;
-        let input_buses =
-            slice::from_raw_parts(process_data.inputs, process_data.numInputs as usize);
-        let output_buses =
-            slice::from_raw_parts(process_data.outputs, process_data.numOutputs as usize);
+        let Some(input_buses) = audio_buses(process_data.inputs, process_data.numInputs) else {
+            return kInvalidArgument;
+        };
+        let Some(output_buses) = audio_buses(process_data.outputs, process_data.numOutputs) else {
+            return kInvalidArgument;
+        };
         let params = self.parameters();
         let sample_rate_hz = self.sample_rate_hz.load(Ordering::Relaxed);
 
         match params.mode {
             StreamMode::Send => {
-                self.receiver.reset();
                 copy_input_to_output(input_buses, output_buses, num_samples);
                 let source_channels =
                     collect_source_channels(input_buses, output_buses, num_samples);
@@ -843,7 +927,6 @@ impl IAudioProcessorTrait for StreamProcessor {
                     .push_audio(params, sample_rate_hz, &source_channels, num_samples);
             }
             StreamMode::Receive => {
-                self.sender.reset();
                 fill_outputs_from_receiver(
                     &self.receiver,
                     params,
@@ -1736,6 +1819,19 @@ mod tests {
         assert!(parse_runtime_status_flag(" On "));
         assert!(!parse_runtime_status_flag("0"));
         assert!(!parse_runtime_status_flag("debug"));
+    }
+
+    #[test]
+    fn speaker_arrangement_handles_64_and_96_channel_modes() {
+        let arrangement_64 = speaker_arrangement_for_channels(64);
+        assert_eq!(arrangement_channel_count(arrangement_64), 64);
+
+        let arrangement_96 = speaker_arrangement_for_channels(96);
+        assert_eq!(arrangement_channel_count(arrangement_96), 64);
+        assert_eq!(
+            bus_channel_count_for_arrangement(SpeakerArr::kEmpty, 96),
+            64
+        );
     }
 
     #[test]

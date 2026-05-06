@@ -16,13 +16,13 @@ jobs:
         include:
           - os: ubuntu-latest
             platform: linux
-            archive_name: SomethingNet-linux-ci.zip
+            archive_name: SomeNET-linux-ci.zip
           - os: windows-latest
             platform: windows
-            archive_name: SomethingNet-windows-ci.zip
+            archive_name: SomeNET-windows-ci.zip
           - os: macos-latest
             platform: macos
-            archive_name: SomethingNet-macos-ci.zip
+            archive_name: SomeNET-macos-ci.zip
 
     steps:
       - name: Checkout
@@ -52,7 +52,7 @@ jobs:
         run: |
           python scripts/package_vst3.py \
             --platform "${{ matrix.platform }}" \
-            --bundle-root "dist/SomethingNet.vst3" \
+            --bundle-root "dist/SomeNET.vst3" \
             --archive "dist/${{ matrix.archive_name }}"
 
       - name: Upload CI package

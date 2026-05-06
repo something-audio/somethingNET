@@ -3,7 +3,8 @@ use crate::{
     network::{ClockReference, StreamMode, StreamParameters, StreamTransport},
     params::{
         PARAM_CHANNELS, PARAM_CLOCK_REF, PARAM_ENABLED, PARAM_IP_1, PARAM_IP_2, PARAM_IP_3,
-        PARAM_IP_4, PARAM_MODE, PARAM_PORT, PARAM_PTP_DOMAIN, PARAM_TRANSPORT, parameter_spec,
+        PARAM_IP_4, PARAM_MODE, PARAM_PORT, PARAM_PTP_DOMAIN, PARAM_TRANSPORT, VST3_MAX_CHANNELS,
+        parameter_spec,
     },
 };
 
@@ -313,12 +314,8 @@ impl EditorState {
                 }
             }
             ClickAction::AdjustChannels(delta) => {
-                self.params.channels = step_u8(
-                    self.params.channels,
-                    delta,
-                    1,
-                    crate::network::MAX_CHANNELS as u8,
-                );
+                self.params.channels =
+                    step_u8(self.params.channels, delta, 1, VST3_MAX_CHANNELS as u8);
             }
             ClickAction::AdjustPort(delta) => {
                 self.params.port = step_u16(self.params.port, delta, 1, u16::MAX);

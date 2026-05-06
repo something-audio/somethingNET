@@ -1,15 +1,22 @@
 [package]
-name = "somethingnet_vst3"
+name = "somenet_vst3"
 version = "0.2.0"
 edition = "2024"
-description = "VST3 network audio sender/receiver plugin for RTP/L24 multichannel audio over IP"
+description = "Open-source RTP/L24 network audio streaming app with a VST3 sender/receiver option"
 license = "MIT"
-repository = "https://github.com/something-audio/somethingNET"
+repository = "https://github.com/something-audio/SomeNET"
 
 [lib]
-crate-type = ["cdylib", "staticlib"]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[[bin]]
+name = "somenet"
+path = "src/bin/somenet.rs"
 
 [dependencies]
+cpal = "0.17.3"
+ctrlc = "3.5.2"
+eframe = { version = "0.34.1", default-features = false, features = ["default_fonts", "glow"] }
 libc = "0.2"
 vst3 = "0.3.0"
 

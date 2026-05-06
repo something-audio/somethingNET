@@ -382,7 +382,7 @@ unsafe fn draw_editor(display: *mut Display, window: Window, editor: &EditorStat
         theme.background,
     );
 
-    draw_text(display, window, gc, "SOMETHINGNET", 24, 42, theme.text);
+    draw_text(display, window, gc, "SomeNET", 24, 42, theme.text);
     draw_text(
         display,
         window,

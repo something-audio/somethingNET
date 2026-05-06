@@ -7,7 +7,7 @@ This is the quickest practical path to validate the Windows plugin UI on an Appl
 - UTM installed on macOS
 - a Windows 11 ARM installer ISO
 - a valid Windows license if you intend to keep using the VM
-- the latest `SomethingNet.vst3` Windows build artifact from CI or a local Windows build output
+- the latest `SomeNET.vst3` Windows build artifact from CI or a local Windows build output
 
 Official references:
 
@@ -78,7 +78,7 @@ If the installer complains that the PC cannot run Windows 11:
 Recommended options:
 
 - download the Windows release ZIP from GitHub Releases inside the VM
-- or use the UTM shared folder to copy the packaged Windows `SomethingNet.vst3`
+- or use the UTM shared folder to copy the packaged Windows `SomeNET.vst3`
 
 Also install a Windows VST3 host for testing. Good options:
 
@@ -91,7 +91,7 @@ On Windows, VST3 plugins normally go to:
 
 `C:\Program Files\Common Files\VST3`
 
-Copy `SomethingNet.vst3` there.
+Copy `SomeNET.vst3` there.
 
 ## Step 7. Validate The GUI
 

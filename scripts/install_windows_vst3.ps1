@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
-$pluginName = "SomethingNet"
+$pluginName = "SomeNET"
 
 if (-not $env:INSTALL_ROOT -or [string]::IsNullOrWhiteSpace($env:INSTALL_ROOT)) {
     $installRoot = Join-Path $env:COMMONPROGRAMFILES "VST3"

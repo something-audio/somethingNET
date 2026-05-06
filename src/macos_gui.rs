@@ -27,10 +27,11 @@ use vst3::{
 
 use crate::{
     editor_api::EditorControllerApi,
-    network::{ClockReference, MAX_CHANNELS, StreamMode, StreamTransport},
+    network::{ClockReference, StreamMode, StreamTransport},
     params::{
         PARAM_CHANNELS, PARAM_CLOCK_REF, PARAM_ENABLED, PARAM_IP_1, PARAM_IP_2, PARAM_IP_3,
-        PARAM_IP_4, PARAM_MODE, PARAM_PORT, PARAM_PTP_DOMAIN, PARAM_TRANSPORT, parameter_spec,
+        PARAM_IP_4, PARAM_MODE, PARAM_PORT, PARAM_PTP_DOMAIN, PARAM_TRANSPORT, VST3_MAX_CHANNELS,
+        parameter_spec,
     },
 };
 
@@ -325,7 +326,7 @@ define_class!(
 
             let channels = parse_field_u32(&self.ivars().channels)
                 .unwrap_or(current.channels as u32)
-                .clamp(1, MAX_CHANNELS as u32);
+                .clamp(1, VST3_MAX_CHANNELS as u32);
             unsafe {
                 (controller.apply_ui_parameter)(
                     controller.controller,
@@ -424,7 +425,7 @@ fn build_editor_ui(controller: EditorControllerApi, mtm: MainThreadMarker) -> Ed
         configure_root_layer(&layer);
     }
 
-    let title = label("SOMETHINGNET", 24.0, 434.0, 240.0, 24.0, mtm);
+    let title = label("SomeNET", 24.0, 434.0, 240.0, 24.0, mtm);
     let brand_logo = branding_logo(24.0, 404.0, 104.0, 55.0, mtm);
     let mode_badge = secondary_label("", 0.0, 0.0, 1.0, 1.0, mtm);
     let top_rule = separator(0.0, 0.0, 0.0, mtm);

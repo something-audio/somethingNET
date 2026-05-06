@@ -1,17 +1,20 @@
 # Latency and PTP Plan
 
-This document describes the practical path from the current SomethingNet transport to a lower-latency, more clock-aware network audio stack.
+This document describes the practical path from the current SomeNET transport to a lower-latency, more clock-aware network audio stack.
 
 ## Current State
 
-Today the plugin is intentionally conservative:
+The default transport profile is now tuned for low-latency wired operation:
 
-- sender startup prebuffering is enabled to smooth bursty host callbacks
-- receiver playout targets more than one callback window plus packet safety
+- sender startup prebuffering is limited to a small packet reserve
+- receiver playout targets one callback window plus packet safety
+- 44.1 kHz streams use short packets instead of the older 10 ms packet cadence
 - drift correction uses duplicate/drop frame steering
-- SDP currently advertises either a local clock or a PTP-traceable clock reference with a SomethingNet-specific PTP domain attribute
+- SDP currently advertises either a local clock or a PTP-traceable clock reference with a SomeNET-specific PTP domain attribute
+- the RTP engine supports stream widths up to 96 channels
+- the VST3 wrapper is intentionally capped at 64 host-facing input/output channels
 
-That design is robust for creative-tool interoperability, but it leaves avoidable latency on the table.
+That design keeps the code simple and responsive for creative-tool interoperability. The next latency wins are mainly in clocking, drift handling, and network validation.
 
 ## Why Dante Gets Closer to 1 ms
 
@@ -29,7 +32,7 @@ General-purpose plugin hosts add:
 - interface-driver latency
 - burstier callback cadence than dedicated hardware
 
-That means the right near-term target for SomethingNet is not “1 ms everywhere”, but “predictable low single-digit milliseconds on wired networks with small host buffers”.
+That means the right near-term target for SomeNET is not “1 ms everywhere”, but “predictable low single-digit milliseconds on wired networks with small host buffers”.
 
 ## Phase 1: Low-Latency Transport Profile
 
@@ -37,10 +40,10 @@ Goal: reduce baseline latency without making the stream fragile.
 
 Tasks:
 
-- add an explicit latency mode or target buffer parameter in milliseconds
-- reduce sender startup prebuffering for an aggressive wired profile
-- make receiver target depth track the requested latency, not a fixed conservative callback multiple
-- surface actual target latency in milliseconds in the runtime monitor
+- [ ] add an explicit latency mode or target buffer parameter in milliseconds
+- [x] reduce sender startup prebuffering for an aggressive wired profile
+- [x] make receiver target depth track the current callback size instead of a fixed conservative callback multiple
+- [ ] surface actual target latency in milliseconds in the runtime monitor
 - document recommended host buffer sizes for low-latency operation
 
 Success criteria:
@@ -106,5 +109,5 @@ For the current codebase:
 - use wired Ethernet, not Wi-Fi, for serious latency work
 - run `48 kHz` when targeting ST 2110-style operation
 - keep host block sizes low
+- reserve 96-channel sessions for the core transport and future standalone app path; keep VST3 as a 64-channel integration option
 - treat current PTP support as signaling groundwork, not full synchronization
-

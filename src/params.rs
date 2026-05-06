@@ -2,6 +2,8 @@ use std::ffi::c_char;
 
 use crate::network::{ClockReference, MAX_CHANNELS, StreamMode, StreamParameters, StreamTransport};
 
+pub(crate) const VST3_MAX_CHANNELS: usize = 64;
+
 pub(crate) const PARAM_ENABLED: u32 = 0;
 pub(crate) const PARAM_MODE: u32 = 1;
 pub(crate) const PARAM_TRANSPORT: u32 = 2;
@@ -106,7 +108,7 @@ pub(crate) fn parameter_spec(id: u32) -> Option<IntParamSpec> {
             short_title: "Ch",
             units: "ch",
             min: 1,
-            max: MAX_CHANNELS as u32,
+            max: VST3_MAX_CHANNELS.min(MAX_CHANNELS) as u32,
             default: defaults.channels as u32,
         },
         PARAM_PORT => IntParamSpec {

@@ -13,22 +13,23 @@ use std::sync::mpsc::{
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-pub const MAX_CHANNELS: usize = 16;
+pub const MAX_CHANNELS: usize = 96;
 pub const STATE_SIZE: usize = 17;
 pub const LEGACY_STATE_SIZE: usize = 14;
 
 const PAYLOAD_TYPE_L24: u8 = 96;
 const RTP_HEADER_SIZE: usize = 12;
-const MAX_PACKET_SIZE: usize = 24_576;
-const MAX_PACKET_SAMPLES: usize = 441 * MAX_CHANNELS;
-const SDP_FILE_NAME: &str = "somethingnet.sdp";
-const STARTUP_BUFFER_PACKETS: usize = 4;
+const MAX_PACKET_FRAMES: usize = 96;
+const MAX_PACKET_SAMPLES: usize = MAX_PACKET_FRAMES * MAX_CHANNELS;
+const MAX_PACKET_SIZE: usize = RTP_HEADER_SIZE + (MAX_PACKET_SAMPLES * 3);
+const SDP_FILE_NAME: &str = "somenet.sdp";
+const STARTUP_BUFFER_PACKETS: usize = 2;
 const MAX_BUFFER_PACKETS: usize = 128;
 const MAX_BUFFER_SAMPLES: usize = MAX_BUFFER_PACKETS * MAX_PACKET_SAMPLES;
-const TARGET_CALLBACKS: usize = 2;
-const TARGET_SAFETY_PACKETS: usize = 3;
+const TARGET_CALLBACKS: usize = 1;
+const TARGET_SAFETY_PACKETS: usize = 1;
 const DRIFT_THRESHOLD_PACKETS: usize = 1;
-const SEND_STARTUP_PACKETS: usize = 12;
+const SEND_STARTUP_PACKETS: usize = 2;
 const STALL_SILENCE_TIMEOUT: Duration = Duration::from_millis(20);
 const STREAM_IDLE_TIMEOUT: Duration = Duration::from_millis(250);
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(20);
@@ -40,7 +41,7 @@ const MAX_PACKETS_PER_CALLBACK: usize = 64;
 const MAX_CONCEALMENT_PACKETS_PER_GAP: usize = 8;
 const DSCP_EXPEDITED_FORWARDING: i32 = 46 << 2;
 #[cfg(unix)]
-const SOCKET_BUFFER_BYTES: i32 = 1 << 20;
+const SOCKET_BUFFER_BYTES: i32 = 4 << 20;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const SOCKET_PRIORITY_AUDIO: i32 = 6;
 #[cfg(target_os = "macos")]
@@ -149,7 +150,7 @@ impl ClockReference {
         }
     }
 
-    pub(crate) fn status_name(self) -> &'static str {
+    pub fn status_name(self) -> &'static str {
         match self {
             Self::Local => "local",
             Self::Ptp => "ptp",
@@ -250,7 +251,7 @@ impl StreamLevel {
     fn packet_frames(self) -> usize {
         match self {
             Self::A48k => 48,
-            Self::Legacy44k1 => 441,
+            Self::Legacy44k1 => 44,
             Self::AX96k => 96,
         }
     }
@@ -258,14 +259,13 @@ impl StreamLevel {
     fn packet_interval(self) -> Duration {
         match self {
             Self::A48k | Self::AX96k => RTP_PACKET_INTERVAL,
-            Self::Legacy44k1 => Duration::from_millis(10),
+            Self::Legacy44k1 => Duration::from_nanos(997_732),
         }
     }
 
     fn ptime_ms(self) -> u32 {
         match self {
-            Self::A48k | Self::AX96k => 1,
-            Self::Legacy44k1 => 10,
+            Self::A48k | Self::Legacy44k1 | Self::AX96k => 1,
         }
     }
 
@@ -280,9 +280,9 @@ impl StreamLevel {
 
 fn stream_level(sample_rate_hz: u32, channels: u8) -> Option<StreamLevel> {
     match (sample_rate_hz, channels) {
-        (48_000, 1..=16) => Some(StreamLevel::A48k),
-        (44_100, 1..=16) => Some(StreamLevel::Legacy44k1),
-        (96_000, 1..=8) => Some(StreamLevel::AX96k),
+        (48_000, 1..=96) => Some(StreamLevel::A48k),
+        (44_100, 1..=96) => Some(StreamLevel::Legacy44k1),
+        (96_000, 1..=96) => Some(StreamLevel::AX96k),
         _ => None,
     }
 }
@@ -390,11 +390,7 @@ fn configure_thread_priority() {
     }
 }
 
-pub(crate) fn warning_text(
-    sample_rate_hz: u32,
-    channels: u8,
-    clock_reference: ClockReference,
-) -> String {
+pub fn warning_text(sample_rate_hz: u32, channels: u8, clock_reference: ClockReference) -> String {
     let mut warnings = Vec::new();
     if sample_rate_hz == 44_100 {
         warnings.push("44.1 kHz is supported but not ST 2110-30 compliant");
@@ -404,6 +400,14 @@ pub(crate) fn warning_text(
     }
     if sample_rate_hz == 96_000 && channels > 4 {
         warnings.push("More than 4 channels at 96 kHz is outside ST 2110-30 Level AX");
+    }
+    if channels > 64 {
+        warnings.push(
+            "More than 64 channels is transport-only; the VST3 wrapper is capped at 64 channels",
+        );
+    }
+    if channels >= 64 && sample_rate_hz >= 48_000 {
+        warnings.push("High-channel RTP packets can exceed standard Ethernet MTU; use wired low-jitter networking");
     }
     if matches!(clock_reference, ClockReference::Ptp) {
         warnings.push(
@@ -579,10 +583,7 @@ fn spawn_sender_worker(
             if !primed {
                 if backlog.len() >= SEND_STARTUP_PACKETS {
                     primed = true;
-                    next_send_at = Some(
-                        Instant::now()
-                            + stream.level.packet_interval() * SEND_STARTUP_PACKETS as u32,
-                    );
+                    next_send_at = Some(Instant::now());
                 } else {
                     match rx.recv_timeout(WORKER_POLL_INTERVAL) {
                         Ok(packet) => {
@@ -606,6 +607,8 @@ fn spawn_sender_worker(
                 if send_now {
                     if socket.send(&packet.data[..packet.len]).is_ok() {
                         thread_packets_sent.fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        thread_packets_dropped.fetch_add(1, Ordering::Relaxed);
                     }
                     if let Some(mut packet) = backlog.pop_front() {
                         packet.clear_payload();
@@ -630,6 +633,8 @@ fn spawn_sender_worker(
                     while let Some(mut packet) = backlog.pop_front() {
                         if socket.send(&packet.data[..packet.len]).is_ok() {
                             thread_packets_sent.fetch_add(1, Ordering::Relaxed);
+                        } else {
+                            thread_packets_dropped.fetch_add(1, Ordering::Relaxed);
                         }
                         packet.clear_payload();
                         let _ = recycle_tx.try_send(packet);
@@ -924,6 +929,12 @@ pub struct NetworkSender {
 // Safety: only the real-time audio callback mutates `audio`, while reconfiguration and reset
 // happen via atomics plus the separate control mutex and never access the audio state directly.
 unsafe impl Sync for NetworkSender {}
+
+impl Default for NetworkSender {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl NetworkSender {
     pub fn new() -> Self {
@@ -1412,6 +1423,12 @@ pub struct NetworkReceiver {
 // lifetime through atomics plus the control mutex and never touch the callback-owned state.
 unsafe impl Sync for NetworkReceiver {}
 
+impl Default for NetworkReceiver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NetworkReceiver {
     pub fn new() -> Self {
         Self {
@@ -1599,15 +1616,12 @@ fn write_sdp_file(
 ) {
     let mut extra_clock_lines = String::new();
     if matches!(params.clock_reference, ClockReference::Ptp) {
-        extra_clock_lines.push_str(&format!(
-            "a=x-somethingnet-ptp-domain:{}\r\n",
-            params.ptp_domain
-        ));
+        extra_clock_lines.push_str(&format!("a=x-somenet-ptp-domain:{}\r\n", params.ptp_domain));
     }
     let content = format!(
         "v=0\r\n\
 o=- 0 0 IN IP4 {local_ip}\r\n\
-s=SomethingNet Sender\r\n\
+s=SomeNET Sender\r\n\
 c=IN IP4 {destination_ip}\r\n\
 t=0 0\r\n\
 m=audio {destination_port} RTP/AVP {payload_type}\r\n\
@@ -1664,9 +1678,10 @@ fn decode_rtp_l24_packet(packet: &[u8], channels: u8) -> Option<Vec<f32>> {
     }
 
     let has_padding = packet[0] & 0x20 != 0;
+    let has_extension = packet[0] & 0x10 != 0;
     let csrc_count = (packet[0] & 0x0f) as usize;
     let payload_type = packet[1] & 0x7f;
-    if payload_type != PAYLOAD_TYPE_L24 {
+    if has_extension || payload_type != PAYLOAD_TYPE_L24 {
         return None;
     }
 
@@ -1728,9 +1743,10 @@ fn decode_rtp_l24_packet_fixed(
     }
 
     let has_padding = packet[0] & 0x20 != 0;
+    let has_extension = packet[0] & 0x10 != 0;
     let csrc_count = (packet[0] & 0x0f) as usize;
     let payload_type = packet[1] & 0x7f;
-    if payload_type != PAYLOAD_TYPE_L24 {
+    if has_extension || payload_type != PAYLOAD_TYPE_L24 {
         return None;
     }
 
@@ -1787,8 +1803,12 @@ fn classify_invalid_packet(
     }
 
     let has_padding = packet[0] & 0x20 != 0;
+    let has_extension = packet[0] & 0x10 != 0;
     let csrc_count = (packet[0] & 0x0f) as usize;
     let payload_type = packet[1] & 0x7f;
+    if has_extension {
+        return InvalidPacketKind::Format;
+    }
     if payload_type != PAYLOAD_TYPE_L24 {
         return InvalidPacketKind::Format;
     }
@@ -1932,10 +1952,10 @@ mod tests {
 
     #[test]
     fn channel_mode_limits_follow_level_a_and_ax() {
-        assert_eq!(stream_level(48_000, 16), Some(StreamLevel::A48k));
-        assert_eq!(stream_level(44_100, 16), Some(StreamLevel::Legacy44k1));
-        assert_eq!(stream_level(96_000, 8), Some(StreamLevel::AX96k));
-        assert_eq!(stream_level(96_000, 16), None);
+        assert_eq!(stream_level(48_000, 96), Some(StreamLevel::A48k));
+        assert_eq!(stream_level(44_100, 96), Some(StreamLevel::Legacy44k1));
+        assert_eq!(stream_level(96_000, 96), Some(StreamLevel::AX96k));
+        assert_eq!(stream_level(48_000, 97), None);
         assert_eq!(stream_level(192_000, 2), None);
     }
 
@@ -1954,6 +1974,25 @@ mod tests {
 
         let encoded = encode_state(original);
         let decoded = decode_state(&encoded).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn state_round_trip_preserves_96_channels() {
+        let original = StreamParameters {
+            enabled: true,
+            mode: StreamMode::Receive,
+            transport: StreamTransport::Unicast,
+            channels: 96,
+            port: 5004,
+            ip: [10, 1, 2, 3],
+            clock_reference: ClockReference::Local,
+            ptp_domain: 0,
+        };
+
+        let encoded = encode_state(original);
+        let decoded = decode_state(&encoded).unwrap();
+        assert_eq!(decoded.channels, 96);
         assert_eq!(decoded, original);
     }
 
@@ -2049,6 +2088,20 @@ mod tests {
     }
 
     #[test]
+    fn decoder_rejects_unsupported_rtp_extensions() {
+        let mut packet = vec![0x90, PAYLOAD_TYPE_L24, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1];
+        for _ in 0..(48 * 2) {
+            write_l24_sample_vec(&mut packet, 0.25);
+        }
+
+        assert!(decode_rtp_l24_packet_strict(&packet, 2, 48).is_none());
+        assert!(matches!(
+            classify_invalid_packet(&packet, 2, 48),
+            InvalidPacketKind::Format
+        ));
+    }
+
+    #[test]
     fn sender_reset_clears_partial_packet_state() {
         let sender = NetworkSender::new();
         let params = StreamParameters {
@@ -2093,13 +2146,14 @@ mod tests {
 
     #[test]
     fn target_buffer_scales_above_single_callback() {
-        assert_eq!(target_buffer_samples(StreamLevel::A48k, 4, 512), 4_800);
-        assert_eq!(target_buffer_samples(StreamLevel::A48k, 2, 128), 864);
+        assert_eq!(target_buffer_samples(StreamLevel::A48k, 4, 512), 2_304);
+        assert_eq!(target_buffer_samples(StreamLevel::A48k, 2, 128), 384);
         assert_eq!(
             target_buffer_samples(StreamLevel::Legacy44k1, 2, 512),
-            6_174
+            1_144
         );
-        assert_eq!(target_buffer_samples(StreamLevel::A48k, 16, 512), 19_200);
+        assert_eq!(target_buffer_samples(StreamLevel::A48k, 16, 512), 9_216);
+        assert_eq!(target_buffer_samples(StreamLevel::A48k, 96, 64), 13_824);
     }
 
     #[test]
@@ -2126,6 +2180,7 @@ mod tests {
             warning_text(48_000, 16, ClockReference::Local).contains("outside ST 2110-30 Level A")
         );
         assert_eq!(warning_text(48_000, 8, ClockReference::Local), "");
+        assert!(warning_text(48_000, 96, ClockReference::Local).contains("transport-only"));
         assert!(warning_text(48_000, 2, ClockReference::Ptp).contains("PTP mode"));
     }
 
@@ -2151,26 +2206,12 @@ mod tests {
             samples: [0.25; MAX_PACKET_SAMPLES],
         });
         let mut out = vec![1.0_f32; 8];
-        let mut output_channels = [
-            Some(out.as_mut_slice()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        ];
-
-        state.clear_stalled_stream(&mut output_channels, 1, 8);
+        {
+            let mut output_channels: [Option<&mut [f32]>; MAX_CHANNELS] =
+                std::array::from_fn(|_| None);
+            output_channels[0] = Some(out.as_mut_slice());
+            state.clear_stalled_stream(&mut output_channels, 1, 8);
+        }
 
         assert_eq!(state.queued_samples, 0);
         assert!(!state.primed);
@@ -2222,6 +2263,8 @@ mod tests {
         let deadline = Instant::now() + Duration::from_millis(250);
         let mut received_audio = false;
         while Instant::now() < deadline {
+            sender.push_audio(params, 48_000, &input_channels, 48);
+
             {
                 let mut output_channels: [Option<&mut [f32]>; MAX_CHANNELS] =
                     std::array::from_fn(|_| None);

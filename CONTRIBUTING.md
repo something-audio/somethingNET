@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for contributing to SomethingNet.
+Thanks for contributing to SomeNET.
 
 This document covers local setup, development workflow, packaging, and release mechanics. For product overview and runtime usage, see [README.md](README.md).
 
@@ -31,8 +31,8 @@ clang --version
 Clone and build:
 
 ```bash
-git clone https://github.com/something-audio/somethingNET.git
-cd somethingNET
+git clone https://github.com/something-audio/SomeNET.git
+cd SomeNET
 cargo build
 ```
 

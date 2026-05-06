@@ -1,6 +1,6 @@
 # Distribution Signing
 
-SomethingNet now has release-workflow hooks for:
+SomeNET now has release-workflow hooks for:
 
 - macOS Developer ID signing and notarization
 - Windows code signing

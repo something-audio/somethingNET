@@ -5,7 +5,7 @@ param(
     [string]$BundleRoot
 )
 
-$signFile = Join-Path $BundleRoot "Contents\x86_64-win\SomethingNet.vst3"
+$signFile = Join-Path $BundleRoot "Contents\x86_64-win\SomeNET.vst3"
 if (-not (Test-Path $signFile)) {
     throw "Signable file not found: $signFile"
 }
@@ -30,7 +30,7 @@ $timestampUrl = if ([string]::IsNullOrWhiteSpace($env:WINDOWS_SIGN_TIMESTAMP_URL
     $env:WINDOWS_SIGN_TIMESTAMP_URL
 }
 
-$certPath = Join-Path $env:RUNNER_TEMP "somethingnet-signing-cert.p12"
+$certPath = Join-Path $env:RUNNER_TEMP "somenet-signing-cert.p12"
 [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String($certBase64))
 
 try {
@@ -40,7 +40,7 @@ try {
         /tr $timestampUrl `
         /f $certPath `
         /p $certPassword `
-        /d "SomethingNet VST3 plugin" `
+        /d "SomeNET VST3 plugin" `
         $signFile
 
     & $signtool.FullName verify /pa /v $signFile

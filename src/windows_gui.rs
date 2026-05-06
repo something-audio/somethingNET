@@ -40,7 +40,7 @@ use crate::{
 };
 
 const TIMER_ID: usize = 1;
-const WINDOW_CLASS_NAME: &str = "SomethingNetEditorWindow";
+const WINDOW_CLASS_NAME: &str = "SomeNETEditorWindow";
 
 struct WinEditorView {
     controller: EditorControllerApi,
@@ -294,17 +294,7 @@ unsafe fn draw_editor(hwnd: HWND, hdc: HDC, editor: &EditorState) {
     SetBkMode(hdc, TRANSPARENT as i32);
     SetTextColor(hdc, rgb_to_colorref(theme.text));
 
-    draw_text(
-        hdc,
-        "SOMETHINGNET",
-        24,
-        34,
-        220,
-        22,
-        theme.text,
-        false,
-        DT_LEFT,
-    );
+    draw_text(hdc, "SomeNET", 24, 34, 220, 22, theme.text, false, DT_LEFT);
     draw_text(
         hdc,
         if matches!(editor.params.mode, StreamMode::Send) {

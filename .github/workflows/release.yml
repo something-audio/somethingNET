@@ -39,13 +39,13 @@ jobs:
         include:
           - os: macos-latest
             platform: macos
-            archive_name: SomethingNet-macos.zip
+            archive_name: SomeNET-macos.zip
           - os: windows-latest
             platform: windows
-            archive_name: SomethingNet-windows.zip
+            archive_name: SomeNET-windows.zip
           - os: ubuntu-latest
             platform: linux
-            archive_name: SomethingNet-linux.zip
+            archive_name: SomeNET-linux.zip
 
     steps:
       - name: Checkout
@@ -67,7 +67,7 @@ jobs:
         run: |
           python scripts/package_vst3.py \
             --platform "${{ matrix.platform }}" \
-            --bundle-root "dist/SomethingNet.vst3" \
+            --bundle-root "dist/SomeNET.vst3" \
             --version "${{ github.ref_name }}"
 
       - name: Import Apple signing certificate
@@ -75,15 +75,15 @@ jobs:
         shell: bash
         run: |
           KEYCHAIN_PASSWORD="$(uuidgen)"
-          KEYCHAIN_PATH="$RUNNER_TEMP/somethingnet-signing.keychain-db"
-          CERT_PATH="$RUNNER_TEMP/somethingnet-signing.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/somenet-signing.keychain-db"
+          CERT_PATH="$RUNNER_TEMP/somenet-signing.p12"
           python3 - <<'PY'
           import base64
           import os
           from pathlib import Path
 
           cert = base64.b64decode(os.environ["APPLE_SIGNING_CERTIFICATE_P12_BASE64"])
-          Path(os.environ["RUNNER_TEMP"], "somethingnet-signing.p12").write_bytes(cert)
+          Path(os.environ["RUNNER_TEMP"], "somenet-signing.p12").write_bytes(cert)
           PY
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
@@ -109,7 +109,7 @@ jobs:
         if: ${{ !contains(github.ref_name, '-rc') && matrix.platform == 'macos' && env.APPLE_CODESIGN_IDENTITY != '' }}
         shell: bash
         run: |
-          ./scripts/sign_macos_bundle.sh dist/SomethingNet.vst3
+          ./scripts/sign_macos_bundle.sh dist/SomeNET.vst3
 
       - name: Sign Windows bundle with Azure Artifact Signing
         if: ${{ !contains(github.ref_name, '-rc') && matrix.platform == 'windows' && env.AZURE_TENANT_ID != '' && env.AZURE_CLIENT_ID != '' && env.AZURE_CLIENT_SECRET != '' && env.AZURE_TRUSTED_SIGNING_ENDPOINT != '' && env.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME != '' && env.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME != '' }}
@@ -121,23 +121,23 @@ jobs:
           endpoint: ${{ env.AZURE_TRUSTED_SIGNING_ENDPOINT }}
           trusted-signing-account-name: ${{ env.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
           certificate-profile-name: ${{ env.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
-          files: ${{ github.workspace }}\dist\SomethingNet.vst3\Contents\x86_64-win\SomethingNet.vst3
+          files: ${{ github.workspace }}\dist\SomeNET.vst3\Contents\x86_64-win\SomeNET.vst3
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
-          description: SomethingNet VST3 plugin
+          description: SomeNET VST3 plugin
 
       - name: Sign Windows bundle with PFX certificate
         if: ${{ !contains(github.ref_name, '-rc') && matrix.platform == 'windows' && env.AZURE_TENANT_ID == '' && env.WINDOWS_SIGN_CERTIFICATE_P12_BASE64 != '' && env.WINDOWS_SIGN_CERTIFICATE_PASSWORD != '' }}
         shell: pwsh
         run: |
-          .\scripts\sign_windows_vst3.ps1 -BundleRoot (Join-Path $pwd 'dist\SomethingNet.vst3')
+          .\scripts\sign_windows_vst3.ps1 -BundleRoot (Join-Path $pwd 'dist\SomeNET.vst3')
 
       - name: Archive VST3 bundle
         shell: bash
         run: |
           python scripts/archive_vst3.py \
-            --bundle-root "dist/SomethingNet.vst3" \
+            --bundle-root "dist/SomeNET.vst3" \
             --archive "dist/${{ matrix.archive_name }}"
 
       - name: Upload packaged artifact
